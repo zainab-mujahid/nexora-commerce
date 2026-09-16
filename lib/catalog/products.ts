@@ -1,3 +1,5 @@
+import { cache } from "react";
+
 import { createClient } from "@/lib/supabase/server";
 
 import { getCategoryBySlug } from "./categories";
@@ -13,96 +15,106 @@ const DETAIL_SELECT =
 // is a security backstop (it also lets an admin's own session see inactive
 // rows), but a customer-facing listing must never show inactive products
 // regardless of who happens to be viewing it.
-export async function getActiveProducts(options?: {
-  limit?: number;
-}): Promise<ProductListItem[]> {
-  const supabase = await createClient();
-  let query = supabase
-    .from("products")
-    .select(LIST_SELECT)
-    .eq("is_active", true)
-    .order("sort_order", { referencedTable: "images" })
-    .order("created_at", { ascending: false });
+//
+// A genuine query failure is thrown, not swallowed: these are called from
+// Server Components (Step 6 pages), and throwing lets the nearest error.tsx
+// boundary render a real error state, distinct from a legitimate "no
+// products" / "not found" result, which is never an error.
+export const getActiveProducts = cache(
+  async (options?: { limit?: number }): Promise<ProductListItem[]> => {
+    const supabase = await createClient();
+    let query = supabase
+      .from("products")
+      .select(LIST_SELECT)
+      .eq("is_active", true)
+      .order("sort_order", { referencedTable: "images" })
+      .order("created_at", { ascending: false });
 
-  if (options?.limit) {
-    query = query.limit(options.limit);
-  }
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
 
-  const { data, error } = await query;
+    const { data, error } = await query;
 
-  if (error) {
-    console.error("getActiveProducts: failed to load products", error);
-    return [];
-  }
+    if (error) {
+      console.error("getActiveProducts: failed to load products", error);
+      throw new Error("Failed to load products");
+    }
 
-  return data;
-}
+    return data;
+  },
+);
 
 // No is_active filter here: RLS alone decides visibility, so a direct link
 // to a deactivated product still resolves for an admin's own session (e.g.
-// previewing a draft) while correctly 404-ing (null) for everyone else.
-export async function getProductBySlug(slug: string): Promise<ProductDetail | null> {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("products")
-    .select(DETAIL_SELECT)
-    .eq("slug", slug)
-    .order("sort_order", { referencedTable: "images" })
-    .maybeSingle();
+// previewing a draft) while correctly returning null (-> notFound()) for
+// everyone else.
+export const getProductBySlug = cache(
+  async (slug: string): Promise<ProductDetail | null> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("products")
+      .select(DETAIL_SELECT)
+      .eq("slug", slug)
+      .order("sort_order", { referencedTable: "images" })
+      .maybeSingle();
 
-  if (error) {
-    console.error(`getProductBySlug: failed to load product "${slug}"`, error);
-    return null;
-  }
+    if (error) {
+      console.error(`getProductBySlug: failed to load product "${slug}"`, error);
+      throw new Error("Failed to load product");
+    }
 
-  if (!data) return null;
+    if (!data) return null;
 
-  // category comes back as an array — postgrest-js can't infer to-one vs
-  // to-many cardinality from a bare select string without generated
-  // Database types, so it defaults to an array even for this many-to-one
-  // relationship (products.category_id -> categories.id). Normalize it here
-  // so callers get the accurate Category | null shape.
-  const { category, ...rest } = data;
-  return { ...rest, category: category[0] ?? null };
-}
+    // category comes back as an array — postgrest-js can't infer to-one vs
+    // to-many cardinality from a bare select string without generated
+    // Database types, so it defaults to an array even for this many-to-one
+    // relationship (products.category_id -> categories.id). Normalize it
+    // here so callers get the accurate Category | null shape.
+    const { category, ...rest } = data;
+    return { ...rest, category: category[0] ?? null };
+  },
+);
 
 export type ProductsByCategory = {
   category: Category;
   products: ProductListItem[];
 };
 
-// Returns null only when the category itself doesn't exist — a products
-// query failure for an existing category returns an empty list instead, so
-// the two failure modes are never conflated into the same "not found" signal.
-export async function getProductsByCategory(
-  categorySlug: string,
-  options?: { limit?: number },
-): Promise<ProductsByCategory | null> {
-  const category = await getCategoryBySlug(categorySlug);
-  if (!category) return null;
+// Returns null only when the category itself doesn't exist (-> notFound());
+// a products-query failure for an existing category throws instead, so a
+// real error is never rendered as an empty/"not found" category.
+export const getProductsByCategory = cache(
+  async (
+    categorySlug: string,
+    options?: { limit?: number },
+  ): Promise<ProductsByCategory | null> => {
+    const category = await getCategoryBySlug(categorySlug);
+    if (!category) return null;
 
-  const supabase = await createClient();
-  let query = supabase
-    .from("products")
-    .select(LIST_SELECT)
-    .eq("category_id", category.id)
-    .eq("is_active", true)
-    .order("sort_order", { referencedTable: "images" })
-    .order("created_at", { ascending: false });
+    const supabase = await createClient();
+    let query = supabase
+      .from("products")
+      .select(LIST_SELECT)
+      .eq("category_id", category.id)
+      .eq("is_active", true)
+      .order("sort_order", { referencedTable: "images" })
+      .order("created_at", { ascending: false });
 
-  if (options?.limit) {
-    query = query.limit(options.limit);
-  }
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
 
-  const { data, error } = await query;
+    const { data, error } = await query;
 
-  if (error) {
-    console.error(
-      `getProductsByCategory: failed to load products for category "${categorySlug}"`,
-      error,
-    );
-    return { category, products: [] };
-  }
+    if (error) {
+      console.error(
+        `getProductsByCategory: failed to load products for category "${categorySlug}"`,
+        error,
+      );
+      throw new Error("Failed to load products for this category");
+    }
 
-  return { category, products: data };
-}
+    return { category, products: data };
+  },
+);
