@@ -44,3 +44,23 @@ export const getCategoryBySlug = cache(
     return data;
   },
 );
+
+// Admin edit forms (Step 8) look up by id rather than slug, since the slug
+// itself is one of the editable fields.
+export const getCategoryById = cache(
+  async (id: string): Promise<Category | null> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("categories")
+      .select("id, name, slug, description")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`getCategoryById: failed to load category "${id}"`, error);
+      throw new Error("Failed to load category");
+    }
+
+    return data;
+  },
+);

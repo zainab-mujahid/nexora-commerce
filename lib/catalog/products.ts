@@ -66,13 +66,67 @@ export const getProductBySlug = cache(
 
     if (!data) return null;
 
-    // category comes back as an array — postgrest-js can't infer to-one vs
-    // to-many cardinality from a bare select string without generated
-    // Database types, so it defaults to an array even for this many-to-one
-    // relationship (products.category_id -> categories.id). Normalize it
-    // here so callers get the accurate Category | null shape.
+    // TypeScript types `category` as an array — postgrest-js can only prove
+    // a to-one embed's cardinality from generated Database types, which this
+    // project doesn't have, so it defaults the type to an array. That's a
+    // type-inference limitation only: at runtime PostgREST returns a to-one
+    // embed (products.category_id -> categories.id) as a plain object or
+    // null, never an array, so the value must be used as-is, not indexed.
     const { category, ...rest } = data;
-    return { ...rest, category: category[0] ?? null };
+    return { ...rest, category: category as unknown as Category | null };
+  },
+);
+
+// ---- Admin reads (Step 8) ----
+// No is_active filter: an admin managing the catalog must see inactive/draft
+// products too. RLS's is_admin() check is what makes this safe — a
+// non-admin session querying the same way would only ever get active rows
+// back, same as the customer-facing functions above.
+
+export const getAdminProducts = cache(async (): Promise<ProductDetail[]> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("products")
+    .select(DETAIL_SELECT)
+    .order("sort_order", { referencedTable: "images" })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("getAdminProducts: failed to load products", error);
+    throw new Error("Failed to load products");
+  }
+
+  // See the comment in getProductBySlug above: category is a plain object
+  // or null at runtime (a to-one embed), not an array — only the inferred
+  // TypeScript type says otherwise.
+  return data.map(({ category, ...rest }) => ({
+    ...rest,
+    category: category as unknown as Category | null,
+  }));
+});
+
+export const getAdminProductById = cache(
+  async (id: string): Promise<ProductDetail | null> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("products")
+      .select(DETAIL_SELECT)
+      .eq("id", id)
+      .order("sort_order", { referencedTable: "images" })
+      .maybeSingle();
+
+    if (error) {
+      console.error(`getAdminProductById: failed to load product "${id}"`, error);
+      throw new Error("Failed to load product");
+    }
+
+    if (!data) return null;
+
+    // See the comment in getProductBySlug above: category is a plain object
+    // or null at runtime (a to-one embed), not an array — only the inferred
+    // TypeScript type says otherwise.
+    const { category, ...rest } = data;
+    return { ...rest, category: category as unknown as Category | null };
   },
 );
 
