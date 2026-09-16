@@ -31,16 +31,26 @@ export const requireUser = cache(async () => {
   return user;
 });
 
+// Enrichment only — never the source of truth for "is this user logged in."
+// A failed lookup here must not make an authenticated user look like a guest:
+// callers that need to branch UI on auth state should check getUser()/session
+// state directly, matching what proxy.ts already checks, and use this only for
+// display details (name, role) with a graceful fallback when it's unavailable.
 export const getProfile = cache(async (): Promise<Profile | null> => {
   const user = await getUser();
   if (!user) return null;
 
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("profiles")
     .select("id, full_name, avatar_url, role")
     .eq("id", user.id)
     .single();
+
+  if (error) {
+    console.error(`getProfile: failed to load profile for user ${user.id}`, error);
+    return null;
+  }
 
   return data;
 });
