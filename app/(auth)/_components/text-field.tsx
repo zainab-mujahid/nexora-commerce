@@ -1,0 +1,37 @@
+export function TextField({
+  label,
+  name,
+  type = "text",
+  autoComplete,
+  errors,
+}: {
+  label: string;
+  name: string;
+  type?: string;
+  autoComplete?: string;
+  errors?: string[];
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={name} className="text-sm font-medium">
+        {label}
+      </label>
+      <input
+        id={name}
+        name={name}
+        type={type}
+        autoComplete={autoComplete}
+        aria-invalid={errors ? true : undefined}
+        aria-describedby={errors ? `${name}-error` : undefined}
+        className="rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm outline-none focus:border-foreground/50 aria-invalid:border-red-500 dark:border-white/20"
+      />
+      {errors && (
+        <ul id={`${name}-error`} className="text-xs text-red-600">
+          {errors.map((error) => (
+            <li key={error}>{error}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
