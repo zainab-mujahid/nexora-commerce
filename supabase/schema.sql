@@ -302,3 +302,59 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- ============================================================================
+-- Data API privileges for anon / authenticated (Supabase Data API / PostgREST)
+--
+-- RLS policies only filter ROWS; they do nothing without a base PostgreSQL
+-- GRANT authorizing the operation on the table at all. GRANT is checked
+-- first and is coarse ("can this role attempt a SELECT/INSERT/UPDATE/DELETE
+-- on this table, full stop") — without it, Postgres rejects the statement
+-- with `permission denied for table X` (42501) before any RLS policy is
+-- ever evaluated. These statements were missing from this file (and never
+-- issued any other way, since "Automatically expose new tables" was off),
+-- which is why direct table reads failed even though the RLS policies above
+-- were correct.
+--
+-- Grants below are intentionally broader than what RLS ultimately allows
+-- for admin-only writes (e.g. every authenticated user gets INSERT on
+-- products) — that's expected: GRANT only says "an authenticated request
+-- may attempt this statement"; is_admin()'s using/with check clauses above
+-- are what actually decide, per row, whether a non-admin's attempt
+-- succeeds.
+-- ============================================================================
+
+grant usage on schema public to anon, authenticated;
+
+-- profiles: read/update only your own row. No insert/delete grant — rows
+-- are created only by the handle_new_user trigger above (security definer,
+-- runs as the table owner, unaffected by these grants).
+grant select, update on public.profiles to authenticated;
+
+-- categories / products / product_images: public catalog. Both anon (guest
+-- browsing) and authenticated need read; write is admin-gated by RLS.
+grant select
+  on public.categories, public.products, public.product_images
+  to anon, authenticated;
+
+grant insert, update, delete
+  on public.categories, public.products, public.product_images
+  to authenticated;
+
+-- cart_items: authenticated only, full CRUD (add / update quantity / remove / view).
+grant select, insert, update, delete on public.cart_items to authenticated;
+
+-- wishlist_items: authenticated only, add / remove / view. No update grant —
+-- nothing on a wishlist row is ever updated in place.
+grant select, insert, delete on public.wishlist_items to authenticated;
+
+-- addresses: authenticated only, full CRUD (create / edit / delete / set default).
+grant select, insert, update, delete on public.addresses to authenticated;
+
+-- orders: authenticated only. No delete grant — matches the RLS design;
+-- orders are permanent, undeletable records.
+grant select, insert, update on public.orders to authenticated;
+
+-- order_items: authenticated only, select + insert. No update/delete grant —
+-- line items are immutable price/name snapshots once an order is placed.
+grant select, insert on public.order_items to authenticated;

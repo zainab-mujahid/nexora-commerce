@@ -10,6 +10,7 @@ export type Profile = {
   full_name: string | null;
   avatar_url: string | null;
   role: "customer" | "admin";
+  created_at: string;
 };
 
 // getUser() re-validates the token with the Auth server, unlike getSession(),
@@ -43,7 +44,7 @@ export const getProfile = cache(async (): Promise<Profile | null> => {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, full_name, avatar_url, role")
+    .select("id, full_name, avatar_url, role, created_at")
     .eq("id", user.id)
     .single();
 

@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useActionState } from "react";
 
+import { TextField } from "@/app/_components/text-field";
 import { signup } from "@/lib/auth/actions";
-
-import { TextField } from "../_components/text-field";
 
 export function SignupForm() {
   const [state, action, pending] = useActionState(signup, undefined);
