@@ -13,8 +13,10 @@ const DETAIL_SELECT =
 
 // product_images rows only ever store the S3 object key — the public URL is
 // constructed here, at read time, from deployment configuration
-// (S3_PUBLIC_BASE_URL), never persisted.
-function attachImageUrls(
+// (S3_PUBLIC_BASE_URL), never persisted. Exported so other owner-scoped
+// reads that embed product_images (e.g. lib/cart/queries.ts) reuse this
+// instead of re-deriving URLs their own way.
+export function attachImageUrls(
   images: Omit<ProductImage, "url">[],
 ): ProductImage[] {
   return images.map((image) => ({ ...image, url: getS3PublicUrl(image.s3_key) }));

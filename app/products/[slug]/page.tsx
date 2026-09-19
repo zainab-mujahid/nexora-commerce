@@ -3,9 +3,11 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
 import { StockBadge } from "@/app/_components/stock-badge";
+import { getUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getProductBySlug } from "@/lib/catalog/products";
 
+import { AddToCartForm } from "./add-to-cart-form";
 import { ProductImageGallery } from "./product-image-gallery";
 
 export async function generateMetadata({
@@ -23,7 +25,10 @@ export default async function ProductPage({
   params,
 }: PageProps<"/products/[slug]">) {
   const { slug } = await params;
-  const product = await getProductBySlug(slug);
+  const [product, user] = await Promise.all([
+    getProductBySlug(slug),
+    getUser(),
+  ]);
 
   if (!product) notFound();
 
@@ -58,6 +63,21 @@ export default async function ProductPage({
 
         {product.description && (
           <p className="text-sm text-foreground/70">{product.description}</p>
+        )}
+
+        {!product.is_active ? (
+          <p className="text-sm text-foreground/60">
+            This product isn&apos;t available for purchase.
+          </p>
+        ) : user ? (
+          <AddToCartForm productId={product.id} maxQuantity={product.stock} />
+        ) : (
+          <Link
+            href="/login"
+            className="text-sm underline hover:no-underline"
+          >
+            Log in to add to cart
+          </Link>
         )}
       </div>
     </main>
