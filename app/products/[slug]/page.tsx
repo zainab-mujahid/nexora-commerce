@@ -6,9 +6,11 @@ import { StockBadge } from "@/app/_components/stock-badge";
 import { getUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getProductBySlug } from "@/lib/catalog/products";
+import { getWishlistItemForProduct } from "@/lib/wishlist/queries";
 
 import { AddToCartForm } from "./add-to-cart-form";
 import { ProductImageGallery } from "./product-image-gallery";
+import { WishlistButton } from "./wishlist-button";
 
 export async function generateMetadata({
   params,
@@ -31,6 +33,10 @@ export default async function ProductPage({
   ]);
 
   if (!product) notFound();
+
+  const wishlistItem = user
+    ? await getWishlistItemForProduct(product.id)
+    : null;
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-4 py-12 sm:flex-row sm:px-6">
@@ -78,6 +84,13 @@ export default async function ProductPage({
           >
             Log in to add to cart
           </Link>
+        )}
+
+        {user && (
+          <WishlistButton
+            productId={product.id}
+            wishlistItemId={wishlistItem?.id ?? null}
+          />
         )}
       </div>
     </main>
