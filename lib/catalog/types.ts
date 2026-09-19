@@ -8,6 +8,8 @@ export type Category = {
 export type ProductImage = {
   id: string;
   s3_key: string;
+  // Computed at read time from s3_key + S3_PUBLIC_BASE_URL — never stored.
+  url: string;
   alt_text: string | null;
   is_primary: boolean;
   sort_order: number;

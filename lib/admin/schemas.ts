@@ -107,3 +107,40 @@ export const confirmProductImageUploadSchema = z.object({
   key: z.string().trim().min(1).max(1024),
   contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
 });
+
+// ---- Product image management (Step 11) ----
+export const productImageIdSchema = z.object({
+  imageId: z.uuid(),
+});
+
+export const updateProductImageAltTextSchema = z.object({
+  imageId: z.uuid(),
+  altText: z
+    .string()
+    .trim()
+    .max(300, { error: "Alt text must be 300 characters or fewer." })
+    .optional()
+    .or(z.literal("")),
+});
+
+export const moveProductImageSchema = z.object({
+  imageId: z.uuid(),
+  direction: z.enum(["up", "down"]),
+});
+
+export const requestProductImageReplaceUploadSchema = z.object({
+  imageId: z.uuid(),
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
+  sizeBytes: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(PRODUCT_IMAGE_MAX_SIZE_BYTES),
+});
+
+export const confirmProductImageReplaceSchema = z.object({
+  imageId: z.uuid(),
+  key: z.string().trim().min(1).max(1024),
+  contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
+});

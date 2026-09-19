@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
-import { ProductImagePlaceholder } from "@/app/_components/product-image-placeholder";
+import { ProductImageDisplay } from "@/app/_components/product-image-display";
 import { StockBadge } from "@/app/_components/stock-badge";
 import { formatPrice } from "@/lib/catalog/format";
 import { getProductBySlug } from "@/lib/catalog/products";
@@ -28,7 +28,11 @@ export default async function ProductPage({
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-4 py-12 sm:flex-row sm:px-6">
-      <ProductImagePlaceholder className="aspect-square w-full rounded-md sm:w-80 sm:shrink-0" />
+      <ProductImageDisplay
+        images={product.images}
+        alt={product.name}
+        className="aspect-square w-full rounded-md sm:w-80 sm:shrink-0"
+      />
 
       <div className="flex flex-1 flex-col gap-4">
         {product.category && (

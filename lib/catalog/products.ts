@@ -1,14 +1,24 @@
 import { cache } from "react";
 
+import { getS3PublicUrl } from "@/lib/s3/url";
 import { createClient } from "@/lib/supabase/server";
 
 import { getCategoryBySlug } from "./categories";
-import type { Category, ProductDetail, ProductListItem } from "./types";
+import type { Category, ProductDetail, ProductImage, ProductListItem } from "./types";
 
 const LIST_SELECT =
   "id, name, slug, price, stock, images:product_images(id, s3_key, alt_text, is_primary, sort_order)";
 const DETAIL_SELECT =
   "id, name, slug, price, stock, description, is_active, category:categories(id, name, slug, description), images:product_images(id, s3_key, alt_text, is_primary, sort_order)";
+
+// product_images rows only ever store the S3 object key — the public URL is
+// constructed here, at read time, from deployment configuration
+// (S3_PUBLIC_BASE_URL), never persisted.
+function attachImageUrls(
+  images: Omit<ProductImage, "url">[],
+): ProductImage[] {
+  return images.map((image) => ({ ...image, url: getS3PublicUrl(image.s3_key) }));
+}
 
 // The public product list/detail views apply their own is_active filter on
 // top of RLS rather than relying on it alone: RLS's `is_active or is_admin()`
@@ -41,7 +51,10 @@ export const getActiveProducts = cache(
       throw new Error("Failed to load products");
     }
 
-    return data;
+    return data.map((product) => ({
+      ...product,
+      images: attachImageUrls(product.images),
+    }));
   },
 );
 
@@ -72,8 +85,12 @@ export const getProductBySlug = cache(
     // type-inference limitation only: at runtime PostgREST returns a to-one
     // embed (products.category_id -> categories.id) as a plain object or
     // null, never an array, so the value must be used as-is, not indexed.
-    const { category, ...rest } = data;
-    return { ...rest, category: category as unknown as Category | null };
+    const { category, images, ...rest } = data;
+    return {
+      ...rest,
+      images: attachImageUrls(images),
+      category: category as unknown as Category | null,
+    };
   },
 );
 
@@ -99,8 +116,9 @@ export const getAdminProducts = cache(async (): Promise<ProductDetail[]> => {
   // See the comment in getProductBySlug above: category is a plain object
   // or null at runtime (a to-one embed), not an array — only the inferred
   // TypeScript type says otherwise.
-  return data.map(({ category, ...rest }) => ({
+  return data.map(({ category, images, ...rest }) => ({
     ...rest,
+    images: attachImageUrls(images),
     category: category as unknown as Category | null,
   }));
 });
@@ -125,8 +143,12 @@ export const getAdminProductById = cache(
     // See the comment in getProductBySlug above: category is a plain object
     // or null at runtime (a to-one embed), not an array — only the inferred
     // TypeScript type says otherwise.
-    const { category, ...rest } = data;
-    return { ...rest, category: category as unknown as Category | null };
+    const { category, images, ...rest } = data;
+    return {
+      ...rest,
+      images: attachImageUrls(images),
+      category: category as unknown as Category | null,
+    };
   },
 );
 
@@ -169,6 +191,12 @@ export const getProductsByCategory = cache(
       throw new Error("Failed to load products for this category");
     }
 
-    return { category, products: data };
+    return {
+      category,
+      products: data.map((product) => ({
+        ...product,
+        images: attachImageUrls(product.images),
+      })),
+    };
   },
 );

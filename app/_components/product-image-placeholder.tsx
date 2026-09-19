@@ -1,7 +1,5 @@
-// Product image binaries live in S3 (Steps 9-11) and no upload flow exists
-// yet, so every product renders this placeholder regardless of whether its
-// product_images rows are populated — there is no URL to construct until
-// Step 11 defines how s3_key maps to a public URL.
+// Shown by ProductImageDisplay (Step 11) when a product has no
+// product_images rows yet.
 export function ProductImagePlaceholder({ className = "" }: { className?: string }) {
   return (
     <div
