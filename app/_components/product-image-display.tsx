@@ -4,8 +4,10 @@ import { ProductImagePlaceholder } from "./product-image-placeholder";
 
 // images arrive already ordered by sort_order (queried that way in
 // lib/catalog/products.ts) — is_primary is still checked explicitly first
-// since a product isn't required to have one flagged as primary.
-function pickDisplayImage(images: ProductImage[]): ProductImage | null {
+// since a product isn't required to have one flagged as primary. Exported
+// so ProductImageGallery (the product detail page's gallery) picks the same
+// initial image this single-image display would have shown.
+export function pickDisplayImage(images: ProductImage[]): ProductImage | null {
   if (images.length === 0) return null;
   return images.find((image) => image.is_primary) ?? images[0];
 }
