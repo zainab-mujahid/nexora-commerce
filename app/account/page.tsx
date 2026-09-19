@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 
 import { getProfile, requireUser } from "@/lib/auth/dal";
@@ -47,6 +48,13 @@ export default async function AccountPage() {
           </dl>
 
           <AccountForm defaultFullName={profile.full_name ?? ""} />
+
+          <Link
+            href="/account/addresses"
+            className="self-start text-sm underline hover:no-underline"
+          >
+            Manage addresses
+          </Link>
         </>
       )}
     </main>

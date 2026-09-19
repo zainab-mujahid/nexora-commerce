@@ -109,6 +109,14 @@ create table if not exists public.addresses (
   created_at  timestamptz not null default now()
 );
 
+create index if not exists addresses_user_id_idx on public.addresses (user_id);
+
+-- Enforce at most one default address per user at the database level (same
+-- pattern as product_images_one_primary_idx above).
+create unique index if not exists addresses_one_default_idx
+  on public.addresses (user_id)
+  where is_default;
+
 -- ----------------------------------------------------------------------------
 -- orders / order_items
 -- shipping_address is a JSON snapshot (not a live FK) so an order stays
