@@ -5,6 +5,7 @@ import { getCategories } from "@/lib/catalog/categories";
 import { getAdminProductById } from "@/lib/catalog/products";
 
 import { ProductForm } from "../product-form";
+import { ProductImageUpload } from "../product-image-upload";
 
 export async function generateMetadata({
   params,
@@ -30,6 +31,7 @@ export default async function EditProductPage({
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-semibold tracking-tight">Edit product</h1>
       <ProductForm product={product} categories={categories} />
+      <ProductImageUpload productId={product.id} images={product.images} />
     </div>
   );
 }

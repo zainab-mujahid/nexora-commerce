@@ -77,3 +77,33 @@ export type ProductFormState =
       message?: string;
     }
   | undefined;
+
+// ---- Product image upload (Step 10) ----
+// Shared between the client upload component (pre-flight UX hints only) and
+// the server actions (the actual enforcement) — the client-side use is never
+// a substitute for the server-side check.
+export const PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+] as const;
+
+export const PRODUCT_IMAGE_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export const requestProductImageUploadSchema = z.object({
+  productId: z.uuid(),
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
+  sizeBytes: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(PRODUCT_IMAGE_MAX_SIZE_BYTES),
+});
+
+export const confirmProductImageUploadSchema = z.object({
+  productId: z.uuid(),
+  key: z.string().trim().min(1).max(1024),
+  contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
+});
