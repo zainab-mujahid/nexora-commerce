@@ -38,6 +38,7 @@ export const getActiveProducts = cache(
       .select(LIST_SELECT)
       .eq("is_active", true)
       .order("sort_order", { referencedTable: "images" })
+      .order("created_at", { referencedTable: "images" })
       .order("created_at", { ascending: false });
 
     if (options?.limit) {
@@ -70,6 +71,7 @@ export const getProductBySlug = cache(
       .select(DETAIL_SELECT)
       .eq("slug", slug)
       .order("sort_order", { referencedTable: "images" })
+      .order("created_at", { referencedTable: "images" })
       .maybeSingle();
 
     if (error) {
@@ -106,6 +108,7 @@ export const getAdminProducts = cache(async (): Promise<ProductDetail[]> => {
     .from("products")
     .select(DETAIL_SELECT)
     .order("sort_order", { referencedTable: "images" })
+    .order("created_at", { referencedTable: "images" })
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -131,6 +134,7 @@ export const getAdminProductById = cache(
       .select(DETAIL_SELECT)
       .eq("id", id)
       .order("sort_order", { referencedTable: "images" })
+      .order("created_at", { referencedTable: "images" })
       .maybeSingle();
 
     if (error) {
@@ -175,6 +179,7 @@ export const getProductsByCategory = cache(
       .eq("category_id", category.id)
       .eq("is_active", true)
       .order("sort_order", { referencedTable: "images" })
+      .order("created_at", { referencedTable: "images" })
       .order("created_at", { ascending: false });
 
     if (options?.limit) {

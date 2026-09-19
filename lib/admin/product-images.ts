@@ -30,6 +30,63 @@ function toSafeFilename(filename: string): string {
   return cleaned.slice(-150) || "image";
 }
 
+type OrderedProductImage = { id: string; sort_order: number };
+
+// Ensures a product's images have distinct, sequential sort_order values
+// (0, 1, 2, ...) and returns them in that order. Previously, uploaded
+// images never had sort_order set on insert, so every row silently took the
+// column default of 0 — this both assigns new uploads their real next
+// position and, since it's called before every read that depends on order,
+// self-heals any pre-existing rows that are still stuck at 0 the next time
+// that product's images are touched (uploaded to, or reordered). There is
+// no separate migration step: the fix lives entirely on this read path.
+async function normalizeProductImageOrder(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  productId: string,
+): Promise<OrderedProductImage[]> {
+  const { data, error } = await supabase
+    .from("product_images")
+    .select("id, sort_order, created_at")
+    .eq("product_id", productId)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (error) {
+    console.error(
+      `normalizeProductImageOrder: failed to load images for product "${productId}"`,
+      error,
+    );
+    throw new Error("Failed to load product images");
+  }
+
+  const isAlreadySequential = data.every(
+    (image, index) => image.sort_order === index,
+  );
+  if (isAlreadySequential) {
+    return data.map(({ id, sort_order }) => ({ id, sort_order }));
+  }
+
+  const results = await Promise.all(
+    data.map((image, index) =>
+      supabase
+        .from("product_images")
+        .update({ sort_order: index })
+        .eq("id", image.id),
+    ),
+  );
+  const failed = results.find((result) => result.error);
+  if (failed?.error) {
+    console.error(
+      `normalizeProductImageOrder: failed to renumber images for product "${productId}"`,
+      failed.error,
+    );
+    throw new Error("Failed to normalize product image order");
+  }
+
+  return data.map((image, index) => ({ id: image.id, sort_order: index }));
+}
+
 export type RequestProductImageUploadResult =
   | { uploadUrl: string; key: string }
   | { error: string };
@@ -118,11 +175,20 @@ export async function confirmProductImageUpload(
   }
 
   const supabase = await createClient();
+
+  // Normalizing first (self-heals any pre-existing rows still stuck at the
+  // sort_order=0 default) also gives the exact next position: the
+  // normalized list is 0..n-1, so a product with images at 0, 1, 2 gets its
+  // new image at 3.
+  const existingImages = await normalizeProductImageOrder(supabase, productId);
+  const nextSortOrder = existingImages.length;
+
   const { error } = await supabase.from("product_images").insert({
     product_id: productId,
     s3_key: key,
     content_type: metadata.contentType ?? contentType,
     size_bytes: metadata.contentLength ?? null,
+    sort_order: nextSortOrder,
   });
 
   if (error) {
@@ -253,19 +319,12 @@ export async function moveProductImage(
   if (!image) return { error: "Image not found." };
 
   const supabase = await createClient();
-  const { data: siblings, error: siblingsError } = await supabase
-    .from("product_images")
-    .select("id, sort_order")
-    .eq("product_id", image.product_id)
-    .order("sort_order", { ascending: true });
 
-  if (siblingsError) {
-    console.error(
-      `moveProductImage: failed to load images for product "${image.product_id}"`,
-      siblingsError,
-    );
-    return { error: "Something went wrong. Please try again." };
-  }
+  // Normalizing first guarantees distinct, sequential sort_order values to
+  // swap between — without this, legacy rows that are all still stuck at 0
+  // (the pre-fix upload default) would "swap" 0 for 0 and appear to do
+  // nothing, which is exactly the bug being fixed here.
+  const siblings = await normalizeProductImageOrder(supabase, image.product_id);
 
   const index = siblings.findIndex((sibling) => sibling.id === image.id);
   const neighborIndex = parsed.data.direction === "up" ? index - 1 : index + 1;
