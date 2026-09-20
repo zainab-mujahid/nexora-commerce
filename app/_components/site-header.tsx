@@ -100,6 +100,9 @@ function AuthLinks({
       <Link href="/cart" className="hover:opacity-70">
         Cart
       </Link>
+      <Link href="/orders" className="hover:opacity-70">
+        Orders
+      </Link>
       <Link href="/account" className="hover:opacity-70">
         {profile?.full_name?.trim() || "Account"}
       </Link>

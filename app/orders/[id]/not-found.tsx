@@ -4,8 +4,8 @@ export default function NotFound() {
   return (
     <RouteNotFound
       message="We couldn't find that order."
-      backHref="/cart"
-      backLabel="Back to cart"
+      backHref="/orders"
+      backLabel="Back to orders"
     />
   );
 }

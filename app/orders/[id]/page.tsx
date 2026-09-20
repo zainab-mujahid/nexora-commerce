@@ -1,23 +1,26 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import { formatPhoneNumber } from "@/lib/addresses/format";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
-import { getOrderConfirmation } from "@/lib/checkout/queries";
+import { getOrderById } from "@/lib/orders/queries";
+
+import { PlacedBanner } from "./placed-banner";
 
 export const metadata: Metadata = {
-  title: "Order confirmation",
+  title: "Order details",
 };
 
-export default async function OrderConfirmationPage({
+export default async function OrderDetailPage({
   params,
-}: PageProps<"/checkout/confirmation/[orderId]">) {
+}: PageProps<"/orders/[id]">) {
   await requireUser();
-  const { orderId } = await params;
+  const { id } = await params;
 
-  const order = await getOrderConfirmation(orderId);
+  const order = await getOrderById(id);
   if (!order) notFound();
 
   const address = order.shipping_address;
@@ -25,11 +28,13 @@ export default async function OrderConfirmationPage({
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-16">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Order placed</h1>
-        <p className="text-sm text-foreground/60">
-          Thanks for your order — we&apos;ll get it ready. This order is unpaid pending
-          payment integration; no payment has been charged.
-        </p>
+        <Link href="/orders" className="text-sm font-medium hover:opacity-70">
+          &larr; Orders
+        </Link>
+        <h1 className="text-2xl font-semibold tracking-tight">Order details</h1>
+        <Suspense fallback={null}>
+          <PlacedBanner />
+        </Suspense>
       </div>
 
       <section className="flex flex-col gap-2 rounded-md border border-black/10 p-4 text-sm dark:border-white/10">

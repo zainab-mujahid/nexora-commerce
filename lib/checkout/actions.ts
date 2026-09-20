@@ -87,5 +87,9 @@ export async function placeOrder(
   }
 
   revalidatePath("/cart");
-  redirect(`/checkout/confirmation/${orderId}`);
+  // /orders/[id] (Step 17) is the same owner-scoped order-detail read this
+  // used to have its own /checkout/confirmation/[orderId] page for —
+  // ?placed=1 is only what tells that page to show the "thanks for your
+  // order" banner on this one visit.
+  redirect(`/orders/${orderId}?placed=1`);
 }
