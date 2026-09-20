@@ -158,6 +158,120 @@ export const getAdminProductById = cache(
   },
 );
 
+// Escapes ILIKE's own wildcard characters in user-supplied search text, so a
+// customer literally searching for "50% off" or "under_score" matches those
+// characters instead of them being treated as pattern wildcards.
+function escapeIlikePattern(value: string): string {
+  return value.replace(/[%_]/g, (match) => `\\${match}`);
+}
+
+export type ProductSort = "newest" | "price_asc" | "price_desc" | "name_asc";
+
+export type SearchProductsResult = {
+  products: ProductListItem[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+const PRODUCTS_PAGE_SIZE = 12;
+
+// Powers /products (Step 19): search, category filter, sort, and pagination,
+// all applied server-side against the same is_active-only query the rest of
+// the customer storefront uses — a search term or category filter can never
+// surface an inactive product.
+export async function searchProducts(options: {
+  q?: string;
+  categorySlug?: string;
+  sort?: ProductSort;
+  page?: number;
+  pageSize?: number;
+}): Promise<SearchProductsResult> {
+  const pageSize = options.pageSize ?? PRODUCTS_PAGE_SIZE;
+  const requestedPage = Math.max(1, Math.trunc(options.page ?? 1));
+
+  let categoryId: string | null = null;
+  if (options.categorySlug) {
+    const category = await getCategoryBySlug(options.categorySlug);
+    // An unknown category slug should read as "no matches", not silently
+    // fall back to showing every product.
+    if (!category) {
+      return { products: [], totalCount: 0, page: 1, pageSize, totalPages: 1 };
+    }
+    categoryId = category.id;
+  }
+
+  const term = options.q?.trim();
+  const supabase = await createClient();
+
+  // Counted separately, before the row-returning query below: PostgREST
+  // responds 416 Range Not Satisfiable for a .range() that starts past the
+  // end of the result set, so a stale/out-of-bounds ?page= must be clamped
+  // to what actually exists first, rather than ever being sent as a range.
+  let countQuery = supabase
+    .from("products")
+    .select("id", { count: "exact", head: true })
+    .eq("is_active", true);
+  if (term) countQuery = countQuery.ilike("name", `%${escapeIlikePattern(term)}%`);
+  if (categoryId) countQuery = countQuery.eq("category_id", categoryId);
+
+  const { count, error: countError } = await countQuery;
+  if (countError) {
+    console.error("searchProducts: failed to count products", countError);
+    throw new Error("Failed to load products");
+  }
+
+  const totalCount = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+
+  if (totalCount === 0) {
+    return { products: [], totalCount: 0, page: 1, pageSize, totalPages: 1 };
+  }
+
+  let query = supabase.from("products").select(LIST_SELECT).eq("is_active", true);
+  if (term) query = query.ilike("name", `%${escapeIlikePattern(term)}%`);
+  if (categoryId) query = query.eq("category_id", categoryId);
+
+  switch (options.sort) {
+    case "price_asc":
+      query = query.order("price", { ascending: true });
+      break;
+    case "price_desc":
+      query = query.order("price", { ascending: false });
+      break;
+    case "name_asc":
+      query = query.order("name", { ascending: true });
+      break;
+    default:
+      query = query.order("created_at", { ascending: false });
+  }
+
+  query = query
+    .order("sort_order", { referencedTable: "images" })
+    .order("created_at", { referencedTable: "images" })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("searchProducts: failed to load products", error);
+    throw new Error("Failed to load products");
+  }
+
+  return {
+    products: data.map((product) => ({
+      ...product,
+      images: attachImageUrls(product.images),
+    })),
+    totalCount,
+    page,
+    pageSize,
+    totalPages,
+  };
+}
+
 export type ProductsByCategory = {
   category: Category;
   products: ProductListItem[];
