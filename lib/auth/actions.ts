@@ -11,12 +11,24 @@ import { loginSchema, signupSchema, type AuthFormState } from "./schemas";
 
 // A `next` value arrives from the query string, so it is attacker-controlled.
 // Anything other than a single-slash relative path could send the user to
-// another origin after login.
-function safeRedirectTarget(value: FormDataEntryValue | null) {
+// another origin after login — a classic post-login open-redirect used for
+// phishing (the victim sees this app's real login page and enters real
+// credentials, then lands on an attacker-controlled page).
+//
+// A naive `startsWith("/") && !startsWith("//")` check is not enough:
+// browsers treat "\" as equivalent to "/" when parsing a URL for a special
+// scheme (http/https), and they strip stray tab/newline/CR characters from
+// a URL wherever those occur before parsing it (WHATWG URL Standard). That
+// means "/\evil.com" and "/\t/evil.com" both resolve to the protocol-relative
+// "//evil.com" in the browser despite passing a check that only looks at
+// literal leading slashes.
+function safeRedirectTarget(value: FormDataEntryValue | null): string {
   if (typeof value !== "string") return "/";
-  if (!value.startsWith("/") || value.startsWith("//")) return "/";
 
-  return value;
+  const stripped = value.replace(/[\t\r\n]/g, "");
+  if (!/^[/\\](?![/\\])/.test(stripped)) return "/";
+
+  return stripped;
 }
 
 export async function signup(

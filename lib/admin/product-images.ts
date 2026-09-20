@@ -30,6 +30,19 @@ function toSafeFilename(filename: string): string {
   return cleaned.slice(-150) || "image";
 }
 
+// Best-effort cleanup for an object that was already uploaded (a presigned
+// PUT can't cap the request body size up front) but then rejected here — a
+// failure to delete it just means one orphaned object, not a broken upload,
+// so this logs and swallows rather than turning a validation error into a
+// storage error.
+async function deleteRejectedUpload(key: string): Promise<void> {
+  try {
+    await deleteS3Object(key);
+  } catch (deleteError) {
+    console.error(`deleteRejectedUpload: failed to delete oversized upload "${key}"`, deleteError);
+  }
+}
+
 type OrderedProductImage = { id: string; sort_order: number };
 
 // Ensures a product's images have distinct, sequential sort_order values
@@ -171,6 +184,11 @@ export async function confirmProductImageUpload(
     metadata.contentLength !== undefined &&
     metadata.contentLength > PRODUCT_IMAGE_MAX_SIZE_BYTES
   ) {
+    // A presigned PUT can't cap the uploaded size up front, so the oversized
+    // object already landed in S3 before this check ran — reject it without
+    // recording it, but also remove it, or a rejected upload would still
+    // cost storage indefinitely.
+    await deleteRejectedUpload(key);
     return { error: "Uploaded file exceeds the 5MB size limit." };
   }
 
@@ -464,6 +482,7 @@ export async function confirmProductImageReplace(
     metadata.contentLength !== undefined &&
     metadata.contentLength > PRODUCT_IMAGE_MAX_SIZE_BYTES
   ) {
+    await deleteRejectedUpload(key);
     return { error: "Uploaded file exceeds the 5MB size limit." };
   }
 
