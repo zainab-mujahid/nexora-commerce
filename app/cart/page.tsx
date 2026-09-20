@@ -32,6 +32,35 @@ export default async function CartPage() {
         <>
           <ul className="flex flex-col gap-4">
             {items.map((item) => {
+              // The product row still exists (product_id cascades on delete,
+              // so a deleted product's cart_items row would be gone too) but
+              // is no longer visible to this customer's own SELECT — RLS
+              // (products_select_active_or_admin) hides an inactive product
+              // from anyone but an admin, including through this embed.
+              // item.unavailableProduct (name + image, sourced without
+              // relying on that hidden row — see lib/cart/queries.ts) is
+              // what lets this line still say *which* product it is.
+              if (!item.product) {
+                const label = item.unavailableProduct;
+                return (
+                  <li
+                    key={item.id}
+                    className="flex gap-4 rounded-md border border-black/10 p-4 opacity-70 dark:border-white/10"
+                  >
+                    <ProductImageDisplay
+                      images={label?.images ?? []}
+                      alt={label?.name ?? "Unavailable product"}
+                      className="h-24 w-24 shrink-0 rounded-md"
+                    />
+                    <div className="flex flex-1 flex-col gap-2">
+                      <p className="font-medium">{label?.name ?? "Unavailable item"}</p>
+                      <p className="text-sm text-red-600">No longer available.</p>
+                      <RemoveCartItemButton cartItemId={item.id} />
+                    </div>
+                  </li>
+                );
+              }
+
               const isOutOfStock = item.product.stock <= 0;
               const isUnavailable = !item.product.is_active || isOutOfStock;
               const exceedsStock =
@@ -101,6 +130,13 @@ export default async function CartPage() {
             <span>Subtotal</span>
             <span>{formatPrice(subtotal)}</span>
           </div>
+
+          <Link
+            href="/checkout"
+            className="self-end rounded-md bg-foreground px-6 py-2.5 text-sm font-medium text-background hover:opacity-90"
+          >
+            Proceed to checkout
+          </Link>
         </>
       )}
     </main>

@@ -142,13 +142,17 @@ export async function updateCartItemQuantity(
     return { error: "Cart item not found." };
   }
 
+  // null when the product is no longer visible to this customer's own
+  // SELECT — same RLS interaction documented on CartItem["product"] in
+  // lib/cart/queries.ts (an admin deactivated it after it was added to the
+  // cart). Treated the same as "no longer available" below.
   const product = item.product as unknown as {
     id: string;
     stock: number;
     is_active: boolean;
-  };
+  } | null;
 
-  if (!product.is_active) {
+  if (!product || !product.is_active) {
     return { error: "This product is no longer available. Remove it from your cart." };
   }
   if (product.stock <= 0) {

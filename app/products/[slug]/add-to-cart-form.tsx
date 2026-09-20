@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import { addToCart } from "@/lib/cart/actions";
 
@@ -15,24 +15,49 @@ export function AddToCartForm({
     addToCart.bind(null, productId),
     undefined,
   );
+  const [quantity, setQuantity] = useState(1);
 
   if (maxQuantity < 1) {
     return <p className="text-sm text-foreground/60">Out of stock.</p>;
   }
 
+  const canDecrease = !pending && quantity > 1;
+  const canIncrease = !pending && quantity < maxQuantity;
+
   return (
     <form action={formAction} className="flex flex-col gap-2">
       <div className="flex items-center gap-3">
-        <input
-          type="number"
-          name="quantity"
-          min={1}
-          max={maxQuantity}
-          defaultValue={1}
-          disabled={pending}
+        <div
+          role="group"
           aria-label="Quantity"
-          className="w-20 rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
-        />
+          className="inline-flex w-fit items-center overflow-hidden rounded-md border border-black/15 dark:border-white/20"
+        >
+          <button
+            type="button"
+            aria-label="Decrease quantity"
+            disabled={!canDecrease}
+            onClick={() => canDecrease && setQuantity((q) => q - 1)}
+            className="flex h-9 w-9 items-center justify-center text-sm font-medium hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            &minus;
+          </button>
+          <span
+            aria-live="polite"
+            className="w-10 border-x border-black/15 py-2 text-center text-sm tabular-nums dark:border-white/20"
+          >
+            {quantity}
+          </span>
+          <button
+            type="button"
+            aria-label="Increase quantity"
+            disabled={!canIncrease}
+            onClick={() => canIncrease && setQuantity((q) => q + 1)}
+            className="flex h-9 w-9 items-center justify-center text-sm font-medium hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            +
+          </button>
+        </div>
+        <input type="hidden" name="quantity" value={quantity} />
         <button
           type="submit"
           disabled={pending}

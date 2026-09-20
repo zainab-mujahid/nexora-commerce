@@ -366,3 +366,169 @@ grant select, insert, update on public.orders to authenticated;
 -- order_items: authenticated only, select + insert. No update/delete grant —
 -- line items are immutable price/name snapshots once an order is placed.
 grant select, insert on public.order_items to authenticated;
+
+-- ============================================================================
+-- Step 15 — Checkout: place_order()
+--
+-- Converting a cart into an order touches four tables (orders, order_items,
+-- products.stock, cart_items) that must all succeed or all fail together.
+-- PostgREST only ever executes one statement per request, so there is no way
+-- to wrap "insert order -> insert order_items -> decrement stock -> clear
+-- cart" in a single client-driven transaction — a partial failure between
+-- separate requests could leave an order without its items, stock
+-- decremented without an order behind it, or a cleared cart with no order at
+-- all. A single SQL function called via `supabase.rpc()` runs as one
+-- Postgres transaction, so any exception (bad address, empty cart,
+-- unavailable product, insufficient stock) rolls back everything atomically.
+--
+-- SECURITY DEFINER is required (not just convenient) because decrementing
+-- products.stock is gated by products_write_admin — an ordinary customer's
+-- session has no UPDATE privilege on products, by design. Running as the
+-- table owner bypasses that RLS check for this one, narrowly-scoped
+-- operation, the same pattern already used by is_admin() above. Because
+-- SECURITY DEFINER functions are not subject to RLS, this function performs
+-- every authorization check itself: it takes no user_id parameter and
+-- derives the caller exclusively from auth.uid(), verifies the address
+-- belongs to that same user, and only ever reads/writes that user's own
+-- cart_items.
+--
+-- `for update of c, p` locks each matching cart_items row together with its
+-- product row for the rest of the transaction. That closes two race
+-- windows at once: two concurrent checkouts can't both read the same stock
+-- count and both succeed into an oversold state, and a concurrent
+-- add-to-cart/update-quantity request against the very items being checked
+-- out blocks until this transaction commits or rolls back, so the
+-- order/stock/cart-clear below can never act on a cart that changed after
+-- validation ran.
+-- ============================================================================
+create or replace function public.place_order(p_address_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id   uuid := auth.uid();
+  v_address   jsonb;
+  v_order_id  uuid;
+  v_subtotal  numeric(10, 2) := 0;
+  v_item      record;
+  v_has_items boolean := false;
+begin
+  if v_user_id is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
+  select jsonb_build_object(
+    'full_name', a.full_name,
+    'phone', a.phone,
+    'line1', a.line1,
+    'line2', a.line2,
+    'city', a.city,
+    'state', a.state,
+    'postal_code', a.postal_code,
+    'country', a.country
+  )
+  into v_address
+  from public.addresses a
+  where a.id = p_address_id and a.user_id = v_user_id;
+
+  if v_address is null then
+    raise exception 'ADDRESS_NOT_FOUND';
+  end if;
+
+  -- Validate availability/stock and compute the authoritative subtotal from
+  -- current database prices in one pass, while locking every cart_items/
+  -- products row involved (see comment above).
+  for v_item in
+    select c.product_id, c.quantity, p.price, p.stock, p.is_active
+    from public.cart_items c
+    join public.products p on p.id = c.product_id
+    where c.user_id = v_user_id
+    for update of c, p
+  loop
+    v_has_items := true;
+
+    if not v_item.is_active then
+      raise exception 'PRODUCT_UNAVAILABLE:%', v_item.product_id;
+    end if;
+    if v_item.stock < v_item.quantity then
+      raise exception 'INSUFFICIENT_STOCK:%', v_item.product_id;
+    end if;
+
+    v_subtotal := v_subtotal + (v_item.price * v_item.quantity);
+  end loop;
+
+  if not v_has_items then
+    raise exception 'CART_EMPTY';
+  end if;
+
+  -- No shipping/tax/discount model exists yet (see implementation plan) —
+  -- total intentionally equals subtotal until that's introduced.
+  insert into public.orders (user_id, status, subtotal, total, shipping_address)
+  values (v_user_id, 'pending', v_subtotal, v_subtotal, v_address)
+  returning id into v_order_id;
+
+  insert into public.order_items (order_id, product_id, product_name, unit_price, quantity, subtotal)
+  select v_order_id, p.id, p.name, p.price, c.quantity, p.price * c.quantity
+  from public.cart_items c
+  join public.products p on p.id = c.product_id
+  where c.user_id = v_user_id;
+
+  update public.products p
+  set stock = p.stock - c.quantity
+  from public.cart_items c
+  where c.product_id = p.id and c.user_id = v_user_id;
+
+  delete from public.cart_items where user_id = v_user_id;
+
+  return v_order_id;
+end;
+$$;
+
+-- Functions grant EXECUTE to PUBLIC by default, which would let even the
+-- unauthenticated `anon` role attempt to call this — revoke that and grant
+-- only to authenticated, matching every other write path in this file.
+revoke all on function public.place_order(uuid) from public;
+grant execute on function public.place_order(uuid) to authenticated;
+
+-- ============================================================================
+-- Step 15 bug fix — get_own_cart_product_names()
+--
+-- products_select_active_or_admin (`is_active or is_admin()`) means a
+-- customer's own cart_items -> products embed comes back null once a
+-- product they'd already added is deactivated: the cart_items row is still
+-- theirs, but the linked products row is no longer visible to their
+-- session at all. That's the correct, intended behavior for RLS — a
+-- deactivated product shouldn't be readable as if it were still an active
+-- listing — but it left the cart with no way to show *which* line item
+-- that was, which is confusing with more than one affected item.
+--
+-- This is a narrow, deliberate exception to that RLS check, not a
+-- weakening of it: the function is SECURITY DEFINER so it can read a
+-- product regardless of is_active, but it only ever returns the name of a
+-- product the caller's own cart_items already references (`c.user_id =
+-- auth.uid()`), and only that one column. It can't be used to look up an
+-- arbitrary product, and a product's display name isn't sensitive — the
+-- customer already committed to it by adding it while it was active, so
+-- this reveals nothing they didn't already know. Product images are
+-- unaffected by this whole issue: product_images_select_all already grants
+-- select using (true), independent of the linked product's is_active, so
+-- the app can already read a deactivated product's images without this
+-- function.
+-- ============================================================================
+create or replace function public.get_own_cart_product_names()
+returns table (product_id uuid, name text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p.id, p.name
+  from public.cart_items c
+  join public.products p on p.id = c.product_id
+  where c.user_id = auth.uid();
+$$;
+
+revoke all on function public.get_own_cart_product_names() from public;
+grant execute on function public.get_own_cart_product_names() to authenticated;
