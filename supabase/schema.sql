@@ -532,3 +532,64 @@ $$;
 
 revoke all on function public.get_own_cart_product_names() from public;
 grant execute on function public.get_own_cart_product_names() to authenticated;
+
+-- ============================================================================
+-- Step 18 — Admin Order Management: admin_cancel_order()
+--
+-- Cancelling an order has to update orders.status AND restore the stock
+-- place_order() decremented for each item — those two writes must succeed
+-- or fail together, for the same reason place_order() itself is one atomic
+-- function rather than several client calls (see the comment above it).
+--
+-- Unlike place_order()/get_own_cart_product_names(), this one is NOT
+-- SECURITY DEFINER: an admin's own session already has RLS-granted UPDATE
+-- on both orders (orders_update_admin_only) and products (products_write_admin),
+-- so there's no privilege gap to bridge — this function only buys atomicity
+-- for those two admin-authorized writes, not elevated access. The explicit
+-- is_admin() check exists only so a non-admin caller gets a clear error
+-- instead of a silent no-op (RLS would otherwise just filter both writes
+-- down to zero affected rows).
+--
+-- Cancellation is only allowed from 'pending' or 'processing'. Once an
+-- order has shipped, the stock has physically left the building — silently
+-- "restoring" it here would misrepresent real inventory. Reversing a
+-- shipped/delivered order is a returns process, deliberately out of scope.
+-- ============================================================================
+create or replace function public.admin_cancel_order(p_order_id uuid)
+returns void
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_status text;
+begin
+  if not public.is_admin() then
+    raise exception 'ADMIN_REQUIRED';
+  end if;
+
+  select status into v_status
+  from public.orders
+  where id = p_order_id
+  for update;
+
+  if v_status is null then
+    raise exception 'ORDER_NOT_FOUND';
+  end if;
+  if v_status not in ('pending', 'processing') then
+    raise exception 'ORDER_NOT_CANCELLABLE';
+  end if;
+
+  update public.products p
+  set stock = p.stock + oi.quantity
+  from public.order_items oi
+  where oi.order_id = p_order_id
+    and oi.product_id = p.id;
+
+  update public.orders
+  set status = 'cancelled', updated_at = now()
+  where id = p_order_id;
+end;
+$$;
+
+revoke all on function public.admin_cancel_order(uuid) from public;
+grant execute on function public.admin_cancel_order(uuid) to authenticated;

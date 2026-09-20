@@ -144,3 +144,18 @@ export const confirmProductImageReplaceSchema = z.object({
   key: z.string().trim().min(1).max(1024),
   contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
 });
+
+// ---- Order management (Step 18) ----
+// 'cancelled' is deliberately excluded here — it's only ever reached through
+// cancelOrder()'s dedicated RPC (which also restores stock), never through
+// this plain status update. See lib/admin/orders.ts.
+export const ORDER_STATUSES = ["pending", "processing", "shipped", "delivered"] as const;
+
+export const updateOrderStatusSchema = z.object({
+  orderId: z.uuid(),
+  status: z.enum(ORDER_STATUSES),
+});
+
+export const cancelOrderSchema = z.object({
+  orderId: z.uuid(),
+});
