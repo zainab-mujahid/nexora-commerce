@@ -321,3 +321,43 @@ export const getProductsByCategory = cache(
     };
   },
 );
+
+// ---- AI semantic retrieval re-fetch (Step 22 Phase 3) ----
+//
+// Stricter than getActiveProducts() above: also requires stock > 0, not
+// just is_active. Ordinary storefront browsing intentionally still shows
+// out-of-stock active products (with a stock indicator, per Step 19) — but
+// a product the AI shopping assistant recommends must never be one a
+// customer can't actually buy, so this filters both. Built specifically for
+// lib/ai/retrieval.ts's authoritative re-fetch: match_products() only ever
+// returns bare candidate ids + similarity scores, never treated as current
+// truth, so every id it returns is re-verified against live data here
+// before being shown to anyone.
+//
+// Not cache()-wrapped like the functions above: `ids` varies per call, so
+// there's nothing stable for React's cache() to key on within a render.
+export async function getPurchasableProductsByIds(
+  ids: string[],
+): Promise<ProductListItem[]> {
+  if (ids.length === 0) return [];
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("products")
+    .select(LIST_SELECT)
+    .in("id", ids)
+    .eq("is_active", true)
+    .gt("stock", 0)
+    .order("sort_order", { referencedTable: "images" })
+    .order("created_at", { referencedTable: "images" });
+
+  if (error) {
+    console.error("getPurchasableProductsByIds: failed to load products", error);
+    throw new Error("Failed to load products");
+  }
+
+  return data.map((product) => ({
+    ...product,
+    images: attachImageUrls(product.images),
+  }));
+}
