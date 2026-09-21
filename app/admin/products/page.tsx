@@ -5,6 +5,7 @@ import { EmptyState } from "@/app/_components/empty-state";
 import { formatPrice } from "@/lib/catalog/format";
 import { getAdminProducts } from "@/lib/catalog/products";
 
+import { BackfillEmbeddingsButton } from "./backfill-embeddings-button";
 import { ToggleActiveButton } from "./toggle-active-button";
 
 export const metadata: Metadata = {
@@ -25,6 +26,8 @@ export default async function AdminProductsPage() {
           New product
         </Link>
       </div>
+
+      <BackfillEmbeddingsButton />
 
       {products.length === 0 ? (
         <EmptyState message="No products yet." />

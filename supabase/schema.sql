@@ -5,6 +5,23 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
+-- Extensions
+--
+-- pgvector — Step 22 Phase 1B. Adds the `vector` type and its distance
+-- operators (<=>, <->, <#>), used by products.embedding and match_products()
+-- below. Installed into the dedicated `extensions` schema rather than
+-- `public`, per Supabase's documented convention — this keeps the
+-- PostgREST-exposed `public` schema free of extension objects. `extensions`
+-- is already on this database's default search_path (the same reason
+-- gen_random_uuid() above needs no explicit schema qualification or grant),
+-- so `vector` still resolves unqualified in ordinary session/SQL-editor use;
+-- functions below still schema-qualify it explicitly, matching this file's
+-- existing habit of always schema-qualifying (public.categories,
+-- public.is_admin(), etc.) rather than relying on implicit search_path.
+-- ----------------------------------------------------------------------------
+create extension if not exists vector with schema extensions;
+
+-- ----------------------------------------------------------------------------
 -- profiles
 -- One row per auth.users row. Created automatically by a trigger on signup
 -- (see bottom of file) — never insert into this table from the app directly.
@@ -45,6 +62,42 @@ create table if not exists public.products (
 );
 
 create index if not exists products_category_id_idx on public.products (category_id);
+
+-- ----------------------------------------------------------------------------
+-- products.embedding — Step 22 Phase 1B
+--
+-- Nullable pgvector column holding a semantic embedding of a product's
+-- name + description + category only — never price, stock, is_active, or
+-- other fast-changing business facts, which stay authoritative database
+-- filters applied alongside similarity search, not embedding content (see
+-- implementation-plan.txt Step 21). Must remain nullable: every existing
+-- row gets NULL here, and no product is required to have an embedding —
+-- AI-powered retrieval degrades gracefully around NULL rather than ever
+-- being a hard dependency for core catalog functionality. Dimension is
+-- fixed at 1536 to match the selected embedding model (gemini-embedding-2,
+-- see Step 21) — the query embedding passed into match_products() below
+-- must always be produced by that same model/dimension; changing either
+-- requires regenerating every stored embedding and migrating this column,
+-- not just an app-config change.
+--
+-- Generation/backfill is explicitly a later phase, not this one: this
+-- column is added empty and stays empty until that phase runs.
+-- ----------------------------------------------------------------------------
+alter table public.products add column if not exists embedding extensions.vector(1536);
+
+-- No vector index (e.g. HNSW) yet, deliberately: this column is 100% NULL
+-- until the backfill phase populates it, so there is nothing yet for an
+-- index to speed up, and it's not required for correctness at any catalog
+-- size — pgvector's exact-scan cosine distance over the is_active/stock>0/
+-- embedding-not-null-filtered subset below is already fast against a small
+-- catalog. Once real embeddings exist, an approximate index becomes a
+-- performance optimization (not a correctness requirement) worth adding,
+-- e.g.:
+--   create index products_embedding_hnsw_idx on public.products
+--     using hnsw (embedding extensions.vector_cosine_ops);
+-- Left as a comment, not executed now, so it's tuned against real data
+-- (HNSW build parameters are best chosen once there's something to build
+-- against) rather than created against an empty column.
 
 -- ----------------------------------------------------------------------------
 -- product_images
@@ -593,3 +646,85 @@ $$;
 
 revoke all on function public.admin_cancel_order(uuid) from public;
 grant execute on function public.admin_cancel_order(uuid) to authenticated;
+
+-- ============================================================================
+-- Step 22 Phase 1B — match_products()
+--
+-- Controlled semantic-retrieval RPC for the planned AI shopping assistant
+-- (Step 21). Takes a pre-computed query embedding (never raw text — text ->
+-- embedding happens server-side in the app's AI layer, not in the database)
+-- and returns bare product identifiers + a similarity score, nothing else:
+-- the caller is expected to re-fetch full, current product facts afterward
+-- through the existing getProductBySlug()/getActiveProducts()-style catalog
+-- queries before showing anything to a customer, matching Step 21's explicit
+-- "re-verify product IDs/current catalog facts" requirement and avoiding a
+-- second, divergent shape for product data. Never executes any dynamic/
+-- generated SQL — the query below is fixed at function-definition time.
+--
+-- NOT SECURITY DEFINER, unlike place_order()/admin_cancel_order() above:
+-- those needed it because an ordinary customer session has no RLS-granted
+-- UPDATE on products/orders. This function only ever SELECTs, and every row
+-- it can return is a row products_select_active_or_admin already lets the
+-- calling role see (is_active or is_admin()) — there is no privilege gap to
+-- bridge, so it runs with the caller's own rights. It still re-applies
+-- `is_active = true and stock > 0` explicitly rather than trusting RLS
+-- alone, the same defense-in-depth already used by getActiveProducts() in
+-- lib/catalog/products.ts (RLS additionally lets an admin's own session see
+-- inactive rows — this function must never surface one of those to the
+-- shopping assistant, admin session or not). `embedding is not null` skips
+-- every product that hasn't been backfilled/generated yet.
+--
+-- p_category_id takes a categories.id uuid, not a slug or free-text name —
+-- validated the same way searchProducts() in lib/catalog/products.ts already
+-- resolves a slug to an id via getCategoryBySlug() before querying, so
+-- there's no free-text category matching inside the database at all.
+--
+-- p_match_count is clamped to [1, 50] inside the function itself
+-- (least(greatest(...))), regardless of what a caller passes — a bounded
+-- result count enforced at the database layer, not left to app-layer
+-- discipline alone.
+--
+-- Cosine similarity via pgvector's `<=>` operator, which returns cosine
+-- *distance* (0 = identical direction); `1 - distance` is reported as
+-- `similarity` so a higher number consistently means "more similar."
+-- `order by embedding <=> p_query_embedding` (ascending distance) is
+-- equivalent to descending similarity and is the form pgvector's planner
+-- recognizes for index use once an ANN index exists on this column.
+-- ============================================================================
+create or replace function public.match_products(
+  p_query_embedding extensions.vector(1536),
+  p_match_count integer default 10,
+  p_min_price numeric(10, 2) default null,
+  p_max_price numeric(10, 2) default null,
+  p_category_id uuid default null
+)
+returns table (
+  product_id uuid,
+  similarity double precision
+)
+language sql
+stable
+set search_path = public, extensions
+as $$
+  select
+    p.id as product_id,
+    1 - (p.embedding <=> p_query_embedding) as similarity
+  from public.products p
+  where p.is_active
+    and p.stock > 0
+    and p.embedding is not null
+    and (p_category_id is null or p.category_id = p_category_id)
+    and (p_min_price is null or p.price >= p_min_price)
+    and (p_max_price is null or p.price <= p_max_price)
+  order by p.embedding <=> p_query_embedding
+  limit least(greatest(coalesce(p_match_count, 10), 1), 50);
+$$;
+
+-- Granted to anon as well as authenticated: this returns nothing an
+-- unauthenticated visitor couldn't already reconstruct by paginating
+-- searchProducts() today (both already read only is_active products), and
+-- an app-layer decision to require login before calling this (e.g. for
+-- rate-limiting/cost-control reasons) is a Step 22 business choice
+-- independent of — and enforceable on top of — this database-level grant.
+revoke all on function public.match_products(extensions.vector(1536), integer, numeric, numeric, uuid) from public;
+grant execute on function public.match_products(extensions.vector(1536), integer, numeric, numeric, uuid) to anon, authenticated;
