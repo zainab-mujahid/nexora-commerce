@@ -1,6 +1,6 @@
 import "server-only";
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type Schema } from "@google/genai";
 
 import { GEMINI_API_KEY } from "./env";
 
@@ -49,4 +49,57 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 
   return values;
+}
+
+// Selected in Step 22 Phase 4 via a runtime check, not guessed: listing
+// this API key's available models (ai.models.list()) and probing
+// generateContent confirmed "gemini-2.5-flash" is deprecated for this
+// project's key — the API's own error response explicitly pointed to
+// "gemini-3.6-flash" as its replacement, which was then confirmed working
+// with structured JSON output (responseMimeType + responseSchema). A
+// "flash"-tier model is the right cost/latency choice for small structured
+// extraction like lib/ai/intent.ts — this task needs no "pro"-tier
+// reasoning. Re-verify with the same kind of runtime check before reusing
+// this constant far in the future; provider model names/availability
+// change over time (see EMBEDDING_MODEL's comment above for the same
+// caveat).
+export const GENERATION_MODEL = "gemini-3.6-flash";
+
+// Requests Gemini's native structured-output mode (a schema-constrained
+// generation, not free-form prose parsing) and returns the parsed JSON
+// value. Throws on any failure: provider/network error, an empty response,
+// or text that isn't valid JSON — same never-silently-wrong contract as
+// generateEmbedding() above.
+//
+// Returns `unknown` deliberately: a requested response schema constrains
+// Gemini's *output shape*, but it is not a security or correctness
+// boundary on its own, and the model response must still be treated as
+// untrusted input. Every caller (lib/ai/intent.ts today) is required to
+// validate the parsed value with its own Zod schema before treating any of
+// it as trustworthy.
+export async function generateStructuredJson(params: {
+  systemInstruction: string;
+  contents: string;
+  responseSchema: Schema;
+}): Promise<unknown> {
+  const response = await ai.models.generateContent({
+    model: GENERATION_MODEL,
+    contents: params.contents,
+    config: {
+      systemInstruction: params.systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: params.responseSchema,
+    },
+  });
+
+  const text = response.text;
+  if (!text) {
+    throw new Error("Gemini returned an empty structured response.");
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Gemini returned malformed JSON.");
+  }
 }
