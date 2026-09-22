@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
 
 import { askShoppingAssistant, type AssistantTurnResult } from "@/lib/ai/actions";
+import type { ShoppingContext } from "@/lib/ai/context";
 import type { SemanticProductSearchResult } from "@/lib/ai/retrieval";
 
 import { ProductGrid } from "./product-grid";
@@ -22,7 +23,7 @@ type AssistantMessage =
       text: string;
       recommendations: Recommendation[];
     }
-  | { role: "assistant"; id: string; kind: "no_results" }
+  | { role: "assistant"; id: string; kind: "no_results"; text: string }
   | { role: "assistant"; id: string; kind: "error"; error: string };
 
 function toAssistantMessage(id: string, result: AssistantTurnResult): AssistantMessage {
@@ -36,7 +37,7 @@ function toAssistantMessage(id: string, result: AssistantTurnResult): AssistantM
         recommendations: result.recommendations,
       };
     case "no_results":
-      return { role: "assistant", id, kind: "no_results" };
+      return { role: "assistant", id, kind: "no_results", text: result.message };
     case "error":
       return { role: "assistant", id, kind: "error", error: result.error };
   }
@@ -84,6 +85,19 @@ export function AiShoppingAssistant({
   // replaces them, so a fresh recommendation always shows automatically
   // even after a prior dismissal.
   const [viewAllProducts, setViewAllProducts] = useState(false);
+  // Step 22 Phase 7F: the bounded, machine-readable ShoppingContext this
+  // askShoppingAssistant() call most recently returned — separate from
+  // `transcript` (a display-only log) and never derived from it. Starts
+  // null (no prior turn), is sent back verbatim on the next submit, and is
+  // replaced wholesale by whatever the server returns — this component
+  // never merges/edits it locally. Being one more useState alongside
+  // transcript/recommendations above means it inherits the exact same
+  // per-browser-instance isolation already documented on this component
+  // (see the module comment above): no Context/Zustand/localStorage/
+  // sessionStorage/cookies/Supabase/global variable, so a refresh or a
+  // navigation to a differently-mounted instance naturally resets it, and
+  // two browsers/visitors can never share one.
+  const [shoppingContext, setShoppingContext] = useState<ShoppingContext | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -109,29 +123,40 @@ export function AiShoppingAssistant({
     setTranscript((prev) => [...prev, { role: "user", id: crypto.randomUUID(), text }]);
 
     startTransition(async () => {
-      // Exactly one call per turn, sending only this turn's text — no prior
-      // transcript is ever sent back to the pipeline or to Gemini.
-      const result = await askShoppingAssistant(text);
+      // Exactly one call per turn, sending only this turn's text plus the
+      // last ShoppingContext this component holds — no prior transcript is
+      // ever sent back to the pipeline or to Gemini. `shoppingContext` is
+      // whatever the server itself returned last time (or null, on the
+      // first turn) — never edited or derived locally.
+      const result = await askShoppingAssistant(text, shoppingContext);
 
       // Storefront "AI Recommendations" section update rule:
       // - "ok": replace with this turn's verified recommendations and show
       //   them (even if the user had previously clicked "View All
       //   Products" for an older set — a *new* result always takes over).
       //   An empty recommendations array here still shows nothing, since
-      //   showRecommendations requires a non-empty list.
+      //   showRecommendations requires a non-empty list. Also replaces
+      //   shoppingContext wholesale with the server's updated context.
       // - "no_results": clear the recommendations and fall back to normal
       //   product content — never leave the user on an empty
-      //   recommendation-only view.
-      // - "error": touch neither `recommendations` nor `viewAllProducts` —
-      //   the current storefront view (recommendations showing, or normal
-      //   content after a prior "View All Products") is left exactly as it
-      //   was. The failure is only ever shown as this turn's chat bubble.
+      //   recommendation-only view. Still replaces shoppingContext: the
+      //   customer's stated constraints for this turn are real and worth
+      //   keeping for the next follow-up even though nothing matched.
+      // - "error": touch neither `recommendations`, `viewAllProducts`, nor
+      //   `shoppingContext` — the current storefront view (recommendations
+      //   showing, or normal content after a prior "View All Products")
+      //   and the last known-good context are both left exactly as they
+      //   were. The failure is only ever shown as this turn's chat bubble;
+      //   a transient/provider error must never quietly erase a working
+      //   multi-turn conversation.
       if (result.status === "ok") {
         setRecommendations(result.recommendations);
         setViewAllProducts(false);
+        setShoppingContext(result.context);
       } else if (result.status === "no_results") {
         setRecommendations([]);
         setViewAllProducts(false);
+        setShoppingContext(result.context);
       }
 
       setTranscript((prev) => [...prev, toAssistantMessage(crypto.randomUUID(), result)]);
@@ -245,12 +270,7 @@ export function AiShoppingAssistant({
                           )}
                         </>
                       )}
-                      {message.kind === "no_results" && (
-                        <p>
-                          I couldn&apos;t find any matching products in the catalog. Try
-                          rephrasing your request.
-                        </p>
-                      )}
+                      {message.kind === "no_results" && <p>{message.text}</p>}
                       {message.kind === "error" && <p className="text-red-600">{message.error}</p>}
                     </div>
                   )}
