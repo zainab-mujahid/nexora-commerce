@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
+import { AiShoppingAssistant } from "@/app/_components/ai-shopping-assistant";
 import { EmptyState } from "@/app/_components/empty-state";
 import { ProductGrid } from "@/app/_components/product-grid";
 import { getCategories } from "@/lib/catalog/categories";
@@ -143,51 +144,68 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
         </div>
       )}
 
-      {products.length === 0 ? (
-        <EmptyState
-          message={
-            hasFilters
-              ? "No products match your search or filters."
-              : "No products are available right now."
-          }
-        />
-      ) : (
-        <>
-          <ProductGrid products={products} />
+      {/* Independent of the server-rendered filters/grid: per-browser AI
+          recommendations/chat/view state, unaffected by search/filter/sort/
+          pagination. The normal catalog content below (heading + grid/
+          EmptyState + pagination) is passed as `children` — already fully
+          server-rendered here, using this request's `products`/`page`/
+          `totalPages` — and AiShoppingAssistant only decides whether to
+          show it or the AI Recommendations section in its place. Existing
+          URL search/category/sort/page state is never touched by that
+          decision. No recommendationsSectionClassName — this relies on this
+          page's own <main> (max-w-6xl/gap-6/padding) for the "AI
+          Recommendations" section's container, same as before. */}
+      <AiShoppingAssistant>
+        <div className="border-t border-black/10 pt-6 dark:border-white/10">
+          <h2 className="text-lg font-semibold tracking-tight">All Products</h2>
+        </div>
 
-          {totalPages > 1 && (
-            <nav className="flex items-center justify-center gap-4 text-sm" aria-label="Pagination">
-              {page > 1 ? (
-                <Link
-                  href={buildHref(currentParams, { page: String(page - 1) })}
-                  className="hover:opacity-70"
-                >
-                  &larr; Previous
-                </Link>
-              ) : (
-                <span className="text-foreground/30" aria-disabled="true">
-                  &larr; Previous
+        {products.length === 0 ? (
+          <EmptyState
+            message={
+              hasFilters
+                ? "No products match your search or filters."
+                : "No products are available right now."
+            }
+          />
+        ) : (
+          <>
+            <ProductGrid products={products} />
+
+            {totalPages > 1 && (
+              <nav className="flex items-center justify-center gap-4 text-sm" aria-label="Pagination">
+                {page > 1 ? (
+                  <Link
+                    href={buildHref(currentParams, { page: String(page - 1) })}
+                    className="hover:opacity-70"
+                  >
+                    &larr; Previous
+                  </Link>
+                ) : (
+                  <span className="text-foreground/30" aria-disabled="true">
+                    &larr; Previous
+                  </span>
+                )}
+                <span className="text-foreground/60">
+                  Page {page} of {totalPages}
                 </span>
-              )}
-              <span className="text-foreground/60">
-                Page {page} of {totalPages}
-              </span>
-              {page < totalPages ? (
-                <Link
-                  href={buildHref(currentParams, { page: String(page + 1) })}
-                  className="hover:opacity-70"
-                >
-                  Next &rarr;
-                </Link>
-              ) : (
-                <span className="text-foreground/30" aria-disabled="true">
-                  Next &rarr;
-                </span>
-              )}
-            </nav>
-          )}
-        </>
-      )}
+                {page < totalPages ? (
+                  <Link
+                    href={buildHref(currentParams, { page: String(page + 1) })}
+                    className="hover:opacity-70"
+                  >
+                    Next &rarr;
+                  </Link>
+                ) : (
+                  <span className="text-foreground/30" aria-disabled="true">
+                    Next &rarr;
+                  </span>
+                )}
+              </nav>
+            )}
+          </>
+        )}
+      </AiShoppingAssistant>
     </main>
   );
 }

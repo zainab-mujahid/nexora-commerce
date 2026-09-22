@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 
+import { AiShoppingAssistant } from "@/app/_components/ai-shopping-assistant";
 import {
   FeaturedProducts,
   FeaturedProductsSkeleton,
@@ -44,9 +45,19 @@ export default async function Home() {
         </div>
       </div>
 
-      <Suspense fallback={<FeaturedProductsSkeleton />}>
-        <FeaturedProducts />
-      </Suspense>
+      {/* No shared per-section container on this page (unlike /products'
+          <main>), so this supplies its own mx-auto/max-w-6xl/px-6 matching
+          FeaturedProducts' own container styling. Hero above stays outside
+          — always visible, never hidden by recommendation mode. Only the
+          product-browsing section (FeaturedProducts) is passed as children,
+          swapped out for AI Recommendations when active and restored
+          exactly as-is (still server-rendered, not re-fetched) via "View
+          All Products". */}
+      <AiShoppingAssistant recommendationsSectionClassName="mx-auto w-full max-w-6xl px-6 pb-12">
+        <Suspense fallback={<FeaturedProductsSkeleton />}>
+          <FeaturedProducts />
+        </Suspense>
+      </AiShoppingAssistant>
     </main>
   );
 }
