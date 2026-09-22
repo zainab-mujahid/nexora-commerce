@@ -3,6 +3,7 @@ import "server-only";
 import { getCategories } from "@/lib/catalog/categories";
 import { getPurchasableProductsByIds } from "@/lib/catalog/products";
 
+import { logAiEvent } from "./log";
 import {
   mergeShoppingContext,
   shoppingContextTurnInputSchema,
@@ -30,14 +31,14 @@ export async function resolveCategoryId(categoryText: string | null): Promise<st
   let categories: Awaited<ReturnType<typeof getCategories>>;
   try {
     categories = await getCategories();
-  } catch (err) {
+  } catch {
     // A category-lookup failure must not sink the whole search — semantic
     // retrieval alone (see the semanticQuery comment below) can still
     // produce useful results without a deterministic category filter.
-    console.error(
-      "resolveCategoryId: failed to load categories:",
-      err instanceof Error ? err.message : "Unknown error",
-    );
+    // Step 22 Phase 8F: no raw err.message in the log (the old version of
+    // this line did, which this phase's audit flagged as unsafe) — just
+    // the event itself.
+    logAiEvent("error", "ai_category_resolution_failed", {});
     return null;
   }
 

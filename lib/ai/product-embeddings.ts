@@ -3,6 +3,7 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 
 import { generateEmbedding } from "./client";
+import { logAiEvent } from "./log";
 
 // Deterministic and shared by create, edit, and backfill alike — if each
 // call site built its own text differently, a product's embedding could
@@ -61,10 +62,19 @@ export async function generateAndStoreProductEmbedding(
         .maybeSingle();
 
       if (categoryError) {
-        console.error(
-          `generateAndStoreProductEmbedding: failed to load category for product "${product.id}"`,
-          categoryError,
-        );
+        // Step 22 Phase 8G: this final Phase 8 review found this line
+        // logging a raw Supabase error object and a raw product id — the
+        // same "no raw DB error body" standard Phase 8F applied everywhere
+        // else in lib/ai now applies here too, via the same
+        // lib/ai/log.ts abstraction (no new logging system). A product id
+        // is a catalog primary key, not customer/secret data, but is
+        // omitted anyway for consistency with lib/ai/recommend.ts's own
+        // "count, not raw ids" precedent — an aggregate failure signal is
+        // enough for this phase's observability needs.
+        logAiEvent("error", "ai_product_embedding_failed", {
+          operation: "product_embedding_indexing",
+          stage: "category_lookup",
+        });
       } else {
         categoryName = category?.name ?? null;
       }
@@ -76,7 +86,14 @@ export async function generateAndStoreProductEmbedding(
       categoryName,
     });
 
-    const embedding = await generateEmbedding(text);
+    // Step 22 Phase 8F: generateEmbedding() requires a server-controlled
+    // operation label for structured observability (lib/ai/log.ts) — this
+    // call site is the admin catalog embedding-indexing path, distinct from
+    // the shopping-assistant's own "query_embedding" calls in
+    // lib/ai/retrieval.ts. (Phase 8F itself left this file's own logging
+    // below untouched as out of scope; Phase 8G's final review brought it
+    // into scope and sanitized it — see the comments below.)
+    const embedding = await generateEmbedding(text, "product_embedding_indexing");
 
     const { error: updateError } = await supabase
       .from("products")
@@ -84,23 +101,27 @@ export async function generateAndStoreProductEmbedding(
       .eq("id", product.id);
 
     if (updateError) {
-      console.error(
-        `generateAndStoreProductEmbedding: failed to persist embedding for product "${product.id}"`,
-        updateError,
-      );
+      // Step 22 Phase 8G — see the matching comment above on the
+      // category-lookup branch.
+      logAiEvent("error", "ai_product_embedding_failed", {
+        operation: "product_embedding_indexing",
+        stage: "persist",
+      });
       return { success: false };
     }
 
     return { success: true };
-  } catch (err) {
-    // Message text only, never the raw error/response object — the API key
-    // is never part of a request/response body to begin with, but this
-    // avoids ever depending on that being true of every current and future
-    // SDK error shape.
-    console.error(
-      `generateAndStoreProductEmbedding: embedding generation failed for product "${product.id}":`,
-      err instanceof Error ? err.message : "Unknown error",
-    );
+  } catch {
+    // Step 22 Phase 8G: no err.message here anymore — this final Phase 8
+    // review found the old version of this line logging the raw error
+    // message (its own comment called out avoiding the raw error/response
+    // *object*, but still passed err.message text through), which is
+    // exactly the "no raw provider error message" standard the rest of
+    // lib/ai now follows. Only the event + stage are logged.
+    logAiEvent("error", "ai_product_embedding_failed", {
+      operation: "product_embedding_indexing",
+      stage: "generation",
+    });
     return { success: false };
   }
 }

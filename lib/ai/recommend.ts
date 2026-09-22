@@ -6,6 +6,8 @@ import * as z from "zod";
 import { formatPrice } from "@/lib/catalog/format";
 
 import { generateStructuredJson } from "./client";
+import { AiInvalidResponseError } from "./errors";
+import { logAiEvent } from "./log";
 import type { SemanticProductSearchResult } from "./retrieval";
 import type { PriceReference } from "./search";
 
@@ -20,6 +22,20 @@ const MAX_CANDIDATE_PRODUCTS = 50;
 // always comes from the candidate object itself, never from this truncated
 // copy).
 const MAX_DESCRIPTION_CONTEXT_LENGTH = 300;
+// Step 22 Phase 8E: products.name and categories.name are both `text not
+// null` in supabase/schema.sql with no database-level length constraint —
+// unlike description (truncated above since Phase 5), these two fields
+// were being serialized into the grounding prompt completely unbounded.
+// Catalog data is admin-entered, not customer-typed, but "admin-controlled"
+// is not the same as "cost-bounded": an unusually large name/category value
+// would still inflate this prompt for every future turn that retrieves it
+// as a candidate, for as long as that row exists. Same prompt-only
+// truncation pattern as MAX_DESCRIPTION_CONTEXT_LENGTH — never touches
+// stored data, never changes what ProductCard/product detail pages
+// display, only what Gemini sees. Sized generously above any real product
+// name/category (typically well under 100 characters).
+const MAX_NAME_CONTEXT_LENGTH = 200;
+const MAX_CATEGORY_CONTEXT_LENGTH = 100;
 
 const MAX_MESSAGE_LENGTH = 600;
 const MAX_REASON_LENGTH = 200;
@@ -27,6 +43,19 @@ const MAX_REASON_LENGTH = 200;
 // matches the "recommend, don't dump the catalog" shape of the feature.
 const MAX_RECOMMENDATIONS = 5;
 const MAX_PRODUCT_ID_LENGTH = 100;
+
+// Step 22 Phase 8E: hard ceiling on generateStructuredJson()'s generated
+// output for this call — sized separately from lib/ai/intent.ts's own
+// MAX_OUTPUT_TOKENS because this response shape is larger: up to
+// MAX_RECOMMENDATIONS=5 entries, each with a reason up to
+// MAX_REASON_LENGTH=200 characters, plus a message up to
+// MAX_MESSAGE_LENGTH=600 characters. Worst-case valid text is
+// 600 + 5*200 = 1600 characters (~450-500 tokens) plus JSON structural
+// overhead for the nested array — comfortably under 1000 tokens for any
+// valid response. Same "generous ceiling against runaway generation, never
+// a tight budget that could truncate valid JSON" intent as intent.ts's
+// constant.
+const MAX_OUTPUT_TOKENS = 2048;
 
 // Gemini's native structured-output schema for the response shape. As with
 // lib/ai/intent.ts's GEMINI_INTENT_RESPONSE_SCHEMA, this only narrows what
@@ -150,11 +179,11 @@ type GeminiProductContext = {
 function buildProductContext(product: SemanticProductSearchResult): GeminiProductContext {
   return {
     productId: product.id,
-    name: product.name,
+    name: truncate(product.name, MAX_NAME_CONTEXT_LENGTH),
     description: product.description ? truncate(product.description, MAX_DESCRIPTION_CONTEXT_LENGTH) : null,
     price: formatPrice(product.price),
     stock: product.stock,
-    category: product.category?.name ?? null,
+    category: product.category?.name ? truncate(product.category.name, MAX_CATEGORY_CONTEXT_LENGTH) : null,
   };
 }
 
@@ -232,22 +261,26 @@ ${trimmedRequest}`;
       systemInstruction: SYSTEM_INSTRUCTION,
       contents,
       responseSchema: GEMINI_RECOMMENDATION_RESPONSE_SCHEMA,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      operation: "recommendation_generation",
     });
   } catch (err) {
-    console.error(
-      "generateGroundedRecommendation: Gemini request failed:",
-      err instanceof Error ? err.message : "Unknown error",
-    );
-    throw new Error("Could not generate a recommendation right now. Please try again.");
+    // Step 22 Phase 8F: no console.error here — see the matching comment in
+    // lib/ai/intent.ts's extractShoppingIntent() (generateStructuredJson()
+    // already emits a safe failure event; the old raw err.message log was
+    // unsafe). Cause preserved for lib/ai/errors.ts's classifyAiError().
+    throw new Error("Could not generate a recommendation right now. Please try again.", { cause: err });
   }
 
   const parsed = recommendationOutputSchema.safeParse(raw);
   if (!parsed.success) {
-    console.error(
-      "generateGroundedRecommendation: Gemini output failed validation:",
-      z.prettifyError(parsed.error),
-    );
-    throw new Error("Could not generate a recommendation right now. Please try again.");
+    // Step 22 Phase 8F — see the matching comment in lib/ai/intent.ts's
+    // extractShoppingIntent(): no z.prettifyError(parsed.error) in the log,
+    // only the event.
+    logAiEvent("error", "ai_validation_failed", { operation: "recommendation_generation" });
+    // AiInvalidResponseError (Step 22 Phase 8A) — see the matching comment
+    // in lib/ai/intent.ts's extractShoppingIntent().
+    throw new AiInvalidResponseError("Could not generate a recommendation right now. Please try again.");
   }
 
   // Critical security/correctness boundary: every returned productId must
@@ -261,11 +294,24 @@ ${trimmedRequest}`;
     .filter((id) => !candidateById.has(id));
 
   if (unknownIds.length > 0) {
-    console.error(
-      "generateGroundedRecommendation: Gemini referenced unknown productId(s), rejecting response:",
-      unknownIds,
-    );
-    throw new Error("Could not generate a verified recommendation right now. Please try again.");
+    // Step 22 Phase 8F: logs a COUNT of unknown ids, never the raw ids
+    // themselves — this phase's audit found the old version of this line
+    // logged the actual (Gemini-produced) product ids, which is exactly
+    // the "raw product IDs" this phase's logging rules disallow absent a
+    // demonstrated operational need. A count is enough to see how often
+    // grounding is violated; the exact ids add no observability value this
+    // phase has an actual need for.
+    logAiEvent("error", "ai_grounding_violation", {
+      operation: "recommendation_generation",
+      unknownIdCount: unknownIds.length,
+    });
+    // AiInvalidResponseError (Step 22 Phase 8A): an allowlist violation is
+    // still "Gemini's output failed to satisfy our expected validated
+    // response contract" — the contract includes referencing only real
+    // candidate ids, not just matching the JSON shape. This does not
+    // weaken the allowlist check itself in any way; it only classifies
+    // the resulting rejection the same way a Zod failure above is.
+    throw new AiInvalidResponseError("Could not generate a verified recommendation right now. Please try again.");
   }
 
   // Duplicates are not a security concern (every id already passed the

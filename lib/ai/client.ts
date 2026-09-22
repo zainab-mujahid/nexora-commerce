@@ -3,6 +3,8 @@ import "server-only";
 import { GoogleGenAI, type Schema } from "@google/genai";
 
 import { GEMINI_API_KEY } from "./env";
+import { logAiEvent, type AiOperation } from "./log";
+import { withAiRetry } from "./retry";
 
 // Provider-specific SDK usage is isolated to this one module — every caller
 // (lib/ai/product-embeddings.ts today, any future AI feature) goes through
@@ -29,26 +31,74 @@ export const EMBEDDING_DIMENSIONS = 1536;
 // Callers that must never fail outright (product create/edit) are
 // responsible for catching this themselves — see
 // lib/ai/product-embeddings.ts's generateAndStoreProductEmbedding().
-export async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await ai.models.embedContent({
-    model: EMBEDDING_MODEL,
-    contents: text,
-    config: { outputDimensionality: EMBEDDING_DIMENSIONS },
-  });
-
-  const values = response.embeddings?.[0]?.values;
-
-  if (!Array.isArray(values) || values.length !== EMBEDDING_DIMENSIONS) {
-    throw new Error(
-      `Gemini returned an embedding of unexpected shape (expected ${EMBEDDING_DIMENSIONS} values).`,
+// `operation` (Step 22 Phase 8F): a small, server-controlled label
+// identifying which caller this embedding call is for, used only for
+// structured observability (see lib/ai/log.ts). Required so nothing here
+// is ever silently unobserved — every caller (lib/ai/retrieval.ts,
+// lib/ai/product-embeddings.ts) passes a fixed string literal; never a
+// value derived from user input.
+export async function generateEmbedding(text: string, operation: AiOperation): Promise<number[]> {
+  const start = performance.now();
+  // Step 22 Phase 8G (diagnostic follow-up): a closed-set stage, derived
+  // ONLY from which control-flow branch below actually threw — never from
+  // any user/provider content, message, or error object. Defaults to
+  // "provider_request" (the raw SDK round-trip, including everything
+  // withAiRetry itself does with it) and is only ever narrowed to a later
+  // stage right before that stage's own throw, so a failure that never
+  // reaches the post-call checks keeps the default. Logged only on the
+  // error path below — the success log is untouched.
+  let failureStage: "provider_request" | "invalid_shape" | "invalid_values" = "provider_request";
+  try {
+    // Step 22 Phase 8B: retry wraps ONLY this raw provider round-trip, never
+    // the shape/finite-number checks below — those are our own validation,
+    // not a transient provider condition, and must never be retried (a
+    // malformed embedding will be exactly as malformed on a second attempt).
+    const response = await withAiRetry(
+      () =>
+        ai.models.embedContent({
+          model: EMBEDDING_MODEL,
+          contents: text,
+          config: { outputDimensionality: EMBEDDING_DIMENSIONS },
+        }),
+      { operation },
     );
-  }
 
-  if (!values.every((value) => typeof value === "number" && Number.isFinite(value))) {
-    throw new Error("Gemini returned a non-numeric embedding value.");
-  }
+    const values = response.embeddings?.[0]?.values;
 
-  return values;
+    if (!Array.isArray(values) || values.length !== EMBEDDING_DIMENSIONS) {
+      failureStage = "invalid_shape";
+      throw new Error(
+        `Gemini returned an embedding of unexpected shape (expected ${EMBEDDING_DIMENSIONS} values).`,
+      );
+    }
+
+    if (!values.every((value) => typeof value === "number" && Number.isFinite(value))) {
+      failureStage = "invalid_values";
+      throw new Error("Gemini returned a non-numeric embedding value.");
+    }
+
+    // Step 22 Phase 8F: one safe, structured event per call — success or
+    // error, never both, never the prompt/error text. durationMs uses
+    // performance.now() (monotonic), so it is never skewed by a system
+    // clock adjustment mid-call.
+    logAiEvent("info", "ai_provider_call", {
+      operation,
+      outcome: "success",
+      durationMs: Math.round(performance.now() - start),
+    });
+    return values;
+  } catch (err) {
+    // Step 22 Phase 8G: failureStage added to the existing error event —
+    // still no prompt, error message, stack, or cause; just which of the
+    // three fixed, known control-flow branches produced this failure.
+    logAiEvent("error", "ai_provider_call", {
+      operation,
+      outcome: "error",
+      durationMs: Math.round(performance.now() - start),
+      failureStage,
+    });
+    throw err;
+  }
 }
 
 // Selected in Step 22 Phase 4 via a runtime check, not guessed: listing
@@ -81,25 +131,85 @@ export async function generateStructuredJson(params: {
   systemInstruction: string;
   contents: string;
   responseSchema: Schema;
+  // Step 22 Phase 8E: a hard, server-side ceiling on generated output
+  // tokens, confirmed via direct inspection of this installed SDK's own
+  // type declarations (node_modules/@google/genai/dist/node/node.d.ts,
+  // GenerateContentConfig.maxOutputTokens) rather than guessed — the same
+  // config object this function already builds `systemInstruction`/
+  // `responseMimeType`/`responseSchema` into. Required, not optional, and
+  // deliberately has no default here: lib/ai/intent.ts and
+  // lib/ai/recommend.ts each define their own bound sized for their own
+  // response shape (see each file's own MAX_OUTPUT_TOKENS comment) rather
+  // than sharing one value that would either be too tight for one call
+  // type or unnecessarily loose for the other. Never client-influenced —
+  // both current callers pass a fixed module-level constant, never a
+  // value derived from user input.
+  maxOutputTokens: number;
+  // Step 22 Phase 8F: same purpose/contract as generateEmbedding()'s own
+  // `operation` parameter above — a fixed, server-controlled label used
+  // only for structured observability.
+  operation: AiOperation;
 }): Promise<unknown> {
-  const response = await ai.models.generateContent({
-    model: GENERATION_MODEL,
-    contents: params.contents,
-    config: {
-      systemInstruction: params.systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: params.responseSchema,
-    },
-  });
-
-  const text = response.text;
-  if (!text) {
-    throw new Error("Gemini returned an empty structured response.");
-  }
-
+  const start = performance.now();
+  // Step 22 Phase 8G (diagnostic follow-up): same contract as
+  // generateEmbedding()'s own failureStage above — derived purely from
+  // which control-flow branch below threw, never from content, logged
+  // only on the error path, success log unchanged.
+  let failureStage: "provider_request" | "empty_response" | "malformed_json" = "provider_request";
   try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error("Gemini returned malformed JSON.");
+    // Step 22 Phase 8B: retry wraps ONLY this raw provider round-trip. The
+    // empty-response and malformed-JSON checks below run strictly after a
+    // successful call and are never part of what gets retried — a caller
+    // that keeps throwing away malformed output would just do so again on
+    // any additional attempt, which is exactly the kind of validation
+    // failure this project's retry policy explicitly excludes.
+    const response = await withAiRetry(
+      () =>
+        ai.models.generateContent({
+          model: GENERATION_MODEL,
+          contents: params.contents,
+          config: {
+            systemInstruction: params.systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: params.responseSchema,
+            maxOutputTokens: params.maxOutputTokens,
+          },
+        }),
+      { operation: params.operation },
+    );
+
+    const text = response.text;
+    if (!text) {
+      failureStage = "empty_response";
+      throw new Error("Gemini returned an empty structured response.");
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      failureStage = "malformed_json";
+      throw new Error("Gemini returned malformed JSON.");
+    }
+
+    // Step 22 Phase 8F: one safe, structured event per call — success or
+    // error, never both, never the response text/prompt.
+    logAiEvent("info", "ai_provider_call", {
+      operation: params.operation,
+      outcome: "success",
+      durationMs: Math.round(performance.now() - start),
+    });
+    return parsed;
+  } catch (err) {
+    // Step 22 Phase 8G: failureStage added to the existing error event —
+    // still no prompt, error message, stack, or cause; just which of the
+    // three fixed, known control-flow branches produced this failure.
+    logAiEvent("error", "ai_provider_call", {
+      operation: params.operation,
+      outcome: "error",
+      durationMs: Math.round(performance.now() - start),
+      failureStage,
+    });
+    throw err;
   }
 }

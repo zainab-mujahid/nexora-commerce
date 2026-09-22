@@ -5,6 +5,8 @@ import * as z from "zod";
 
 import { generateStructuredJson } from "./client";
 import { shoppingContextSchema, type ShoppingContext, type ShoppingContextFieldUpdate } from "./context";
+import { AiInvalidResponseError } from "./errors";
+import { logAiEvent } from "./log";
 
 const MAX_INPUT_LENGTH = 500;
 const MAX_SEMANTIC_QUERY_LENGTH = 500;
@@ -16,6 +18,20 @@ const MIN_REQUESTED_COUNT = 1;
 // bulk retrieval — this is a distinct, tighter bound on top of that one,
 // not a replacement for it.
 const MAX_REQUESTED_COUNT = 20;
+
+// Step 22 Phase 8E: hard ceiling on generateStructuredJson()'s generated
+// output, shared by both extraction calls below (extractShoppingIntent and
+// extractShoppingContextUpdate produce the same small flat/near-flat JSON
+// shape). Sized generously above any legitimate response, never tightly:
+// the largest field either schema can produce is semanticQuery, itself
+// already capped at MAX_SEMANTIC_QUERY_LENGTH=500 characters (~150 tokens),
+// plus categoryText capped at MAX_CATEGORY_TEXT_LENGTH=100 characters, plus
+// a handful of short enum/number/boolean fields and JSON structural
+// overhead — comfortably under 400 tokens for any valid response. This
+// exists purely as a ceiling against a runaway/degenerate generation
+// (bounding worst-case cost/latency), not a tight budget that could ever
+// truncate a legitimate response into invalid JSON.
+const MAX_OUTPUT_TOKENS = 1024;
 
 // Gemini's native structured-output schema (an OpenAPI-subset object, not a
 // Zod schema — @google/genai has no Zod interop) for the response shape
@@ -157,22 +173,37 @@ export async function extractShoppingIntent(userInput: string): Promise<Shopping
       systemInstruction: SYSTEM_INSTRUCTION,
       contents: trimmedInput,
       responseSchema: GEMINI_INTENT_RESPONSE_SCHEMA,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      operation: "intent_generation",
     });
   } catch (err) {
-    console.error(
-      "extractShoppingIntent: Gemini request failed:",
-      err instanceof Error ? err.message : "Unknown error",
-    );
-    throw new Error("Could not understand that shopping request right now. Please try again.");
+    // Step 22 Phase 8F: no console.error here — generateStructuredJson()
+    // itself already emits a safe "ai_provider_call" failure event
+    // (lib/ai/client.ts), so logging again here would only duplicate it,
+    // and the old version of this line logged the raw err.message, which
+    // this phase's audit flagged as unsafe (a provider error message can
+    // echo back request content). The original error (e.g. @google/genai's
+    // ApiError, carrying a real HTTP status) is still preserved via `cause`
+    // for lib/ai/errors.ts's classifyAiError() to use later — this
+    // re-thrown Error's own message stays the same short, generic,
+    // safe-to-surface text as before.
+    throw new Error("Could not understand that shopping request right now. Please try again.", {
+      cause: err,
+    });
   }
 
   const parsed = shoppingIntentSchema.safeParse(raw);
   if (!parsed.success) {
-    console.error(
-      "extractShoppingIntent: Gemini output failed validation:",
-      z.prettifyError(parsed.error),
-    );
-    throw new Error("Could not understand that shopping request. Please rephrase it.");
+    // Step 22 Phase 8F: logs only the event + operation, never
+    // z.prettifyError(parsed.error) — that text can echo back fragments of
+    // Gemini's actual (untrusted) output, which this phase's audit flagged
+    // as an unsafe "validation payload" in the old version of this line.
+    logAiEvent("error", "ai_validation_failed", { operation: "intent_generation" });
+    // AiInvalidResponseError (Step 22 Phase 8A), not a plain Error: this is
+    // exactly the "Gemini's output failed our validation contract" case
+    // classifyAiError() is meant to recognize. Same message, same
+    // control flow as before.
+    throw new AiInvalidResponseError("Could not understand that shopping request. Please rephrase it.");
   }
 
   return parsed.data;
@@ -596,22 +627,28 @@ ${trimmedInput}`;
       systemInstruction: CONTEXT_UPDATE_SYSTEM_INSTRUCTION,
       contents,
       responseSchema: GEMINI_CONTEXT_UPDATE_RESPONSE_SCHEMA,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      operation: "intent_generation",
     });
   } catch (err) {
-    console.error(
-      "extractShoppingContextUpdate: Gemini request failed:",
-      err instanceof Error ? err.message : "Unknown error",
-    );
-    throw new Error("Could not understand that shopping request right now. Please try again.");
+    // Step 22 Phase 8F: no console.error here — see the matching comment in
+    // extractShoppingIntent() above (generateStructuredJson() already
+    // emits a safe failure event; the old raw err.message log was unsafe).
+    // Cause preserved for lib/ai/errors.ts's classifyAiError() — see the
+    // matching comment in extractShoppingIntent() above.
+    throw new Error("Could not understand that shopping request right now. Please try again.", {
+      cause: err,
+    });
   }
 
   const parsed = shoppingIntentUpdateWireSchema.safeParse(raw);
   if (!parsed.success) {
-    console.error(
-      "extractShoppingContextUpdate: Gemini output failed validation:",
-      z.prettifyError(parsed.error),
-    );
-    throw new Error("Could not understand that shopping request. Please rephrase it.");
+    // Step 22 Phase 8F — see the matching comment in extractShoppingIntent()
+    // above: no z.prettifyError(parsed.error) in the log, only the event.
+    logAiEvent("error", "ai_validation_failed", { operation: "intent_generation" });
+    // AiInvalidResponseError (Step 22 Phase 8A) — see the matching comment
+    // in extractShoppingIntent() above.
+    throw new AiInvalidResponseError("Could not understand that shopping request. Please rephrase it.");
   }
 
   return parsed.data;

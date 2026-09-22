@@ -7,6 +7,7 @@ import type { ProductDetail } from "@/lib/catalog/types";
 import { createClient } from "@/lib/supabase/server";
 
 import { generateEmbedding } from "./client";
+import { logAiEvent } from "./log";
 
 const MAX_QUERY_LENGTH = 500;
 const DEFAULT_MATCH_COUNT = 10;
@@ -105,7 +106,7 @@ export async function semanticProductSearch(
   // lib/ai/client.ts); a query-time embedding failure legitimately should
   // fail this search rather than silently return nothing or something
   // fabricated, so it's intentionally not caught here.
-  const queryEmbedding = await generateEmbedding(query);
+  const queryEmbedding = await generateEmbedding(query, "query_embedding");
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("match_products", {
@@ -117,7 +118,11 @@ export async function semanticProductSearch(
   });
 
   if (error) {
-    console.error("semanticProductSearch: match_products RPC failed", error);
+    // Step 22 Phase 8F: no raw Supabase error object in the log (the old
+    // version of this line passed `error` directly to console.error,
+    // which this phase's audit flagged as an unsafe raw provider/DB error
+    // body) — just the event itself.
+    logAiEvent("error", "ai_retrieval_failed", {});
     throw new Error("Semantic product search is temporarily unavailable.");
   }
 
