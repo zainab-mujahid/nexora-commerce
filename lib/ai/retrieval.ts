@@ -3,7 +3,7 @@ import "server-only";
 import * as z from "zod";
 
 import { getPurchasableProductsByIds } from "@/lib/catalog/products";
-import type { ProductListItem } from "@/lib/catalog/types";
+import type { ProductDetail } from "@/lib/catalog/types";
 import { createClient } from "@/lib/supabase/server";
 
 import { generateEmbedding } from "./client";
@@ -56,7 +56,12 @@ const semanticProductSearchInputSchema = z
 
 export type SemanticProductSearchInput = z.input<typeof semanticProductSearchInputSchema>;
 
-export type SemanticProductSearchResult = ProductListItem & {
+// ProductDetail (not ProductListItem) as of Step 22 Phase 5: the grounded
+// recommendation layer (lib/ai/recommend.ts) needs description/category as
+// reasoning context — see the comment on getPurchasableProductsByIds() in
+// lib/catalog/products.ts for why that's a widened re-fetch, not a second
+// query.
+export type SemanticProductSearchResult = ProductDetail & {
   similarity: number;
 };
 

@@ -334,17 +334,25 @@ export const getProductsByCategory = cache(
 // truth, so every id it returns is re-verified against live data here
 // before being shown to anyone.
 //
+// Uses DETAIL_SELECT (not LIST_SELECT) as of Step 22 Phase 5: the grounded
+// recommendation layer (lib/ai/recommend.ts) needs description/category as
+// reasoning context, same as the product detail page does. `is_active` in
+// the result is always true here (this query already filters on it) — that
+// is a true, not fabricated, fact about the row. Reusing ProductDetail's
+// shape instead of inventing a third product type keeps this to one extra
+// query field, not a second query.
+//
 // Not cache()-wrapped like the functions above: `ids` varies per call, so
 // there's nothing stable for React's cache() to key on within a render.
 export async function getPurchasableProductsByIds(
   ids: string[],
-): Promise<ProductListItem[]> {
+): Promise<ProductDetail[]> {
   if (ids.length === 0) return [];
 
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("products")
-    .select(LIST_SELECT)
+    .select(DETAIL_SELECT)
     .in("id", ids)
     .eq("is_active", true)
     .gt("stock", 0)
@@ -356,8 +364,12 @@ export async function getPurchasableProductsByIds(
     throw new Error("Failed to load products");
   }
 
-  return data.map((product) => ({
-    ...product,
-    images: attachImageUrls(product.images),
+  // See the comment in getProductBySlug above: category is a plain object
+  // or null at runtime (a to-one embed), not an array — only the inferred
+  // TypeScript type says otherwise.
+  return data.map(({ category, images, ...rest }) => ({
+    ...rest,
+    images: attachImageUrls(images),
+    category: category as unknown as Category | null,
   }));
 }
