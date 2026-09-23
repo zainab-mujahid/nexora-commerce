@@ -8,11 +8,13 @@ import { generateAndStoreProductEmbedding } from "@/lib/ai/product-embeddings";
 import { requireAdmin } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
 
-import { productSchema, type ProductFormState } from "./schemas";
+import { adminResourceIdSchema, productSchema, type ProductFormState } from "./schemas";
 
 // Postgres unique_violation — raised by the `products.slug` unique
 // constraint when a slug collides with an existing row.
 const UNIQUE_VIOLATION = "23505";
+
+const PRODUCT_NOT_FOUND_MESSAGE = "This product no longer exists.";
 
 // Bounds a single backfillProductEmbeddings() call to a fixed batch instead
 // of an unbounded "embed the entire catalog in one request" loop — safe at
@@ -99,6 +101,13 @@ export async function updateProduct(
 ): Promise<ProductFormState> {
   await requireAdmin();
 
+  // Step 24A: `id` is a bound argument, so a crafted request can send
+  // anything — a malformed value never reaches Postgres (see
+  // adminResourceIdSchema in ./schemas).
+  if (!adminResourceIdSchema.safeParse(id).success) {
+    return { message: PRODUCT_NOT_FOUND_MESSAGE };
+  }
+
   const validatedFields = parseProductFields(formData);
   if (!validatedFields.success) {
     return { errors: z.flattenError(validatedFields.error).fieldErrors };
@@ -126,7 +135,10 @@ export async function updateProduct(
     );
   }
 
-  const { error } = await supabase
+  // `.select("id")` returns the rows the UPDATE actually matched, so a
+  // valid-but-nonexistent id (e.g. deleted in another tab) is detected from
+  // this one statement instead of being reported as a successful save.
+  const { data: updated, error } = await supabase
     .from("products")
     .update({
       name,
@@ -137,7 +149,8 @@ export async function updateProduct(
       category_id: categoryId,
       is_active: parseIsActive(formData),
     })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     if (error.code === UNIQUE_VIOLATION) {
@@ -145,6 +158,9 @@ export async function updateProduct(
     }
     console.error(`updateProduct: failed to update product "${id}"`, error);
     return { message: "Something went wrong. Please try again." };
+  }
+  if (updated.length === 0) {
+    return { message: PRODUCT_NOT_FOUND_MESSAGE };
   }
 
   // Regenerate only on a real semantic change (name/description/category) —
@@ -175,19 +191,32 @@ export async function updateProduct(
 }
 
 // A quick activate/deactivate toggle from the product list, independent of
-// the full edit form.
-export async function toggleProductActive(id: string, nextIsActive: boolean) {
+// the full edit form. It's bound directly to a plain <form action>, which
+// must return void, so it reports nothing to the UI either way. Step 24A:
+// both bound arguments are validated before any query (a malformed id or
+// non-boolean flag used to reach Postgres and throw into the admin error
+// page), and a valid id matching no row returns early without revalidating
+// — neither case touches the database or claims a change.
+export async function toggleProductActive(id: string, nextIsActive: boolean): Promise<void> {
   await requireAdmin();
 
+  if (!adminResourceIdSchema.safeParse(id).success || typeof nextIsActive !== "boolean") {
+    return;
+  }
+
   const supabase = await createClient();
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("products")
     .update({ is_active: nextIsActive })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     console.error(`toggleProductActive: failed to update product "${id}"`, error);
     throw new Error("Failed to update product status");
+  }
+  if (updated.length === 0) {
+    return;
   }
 
   revalidatePath("/", "layout");

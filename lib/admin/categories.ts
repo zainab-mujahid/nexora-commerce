@@ -7,11 +7,13 @@ import * as z from "zod";
 import { requireAdmin } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
 
-import { categorySchema, type CategoryFormState } from "./schemas";
+import { adminResourceIdSchema, categorySchema, type CategoryFormState } from "./schemas";
 
 // Postgres unique_violation — raised by the `categories.slug` unique
 // constraint when a slug collides with an existing row.
 const UNIQUE_VIOLATION = "23505";
+
+const CATEGORY_NOT_FOUND_MESSAGE = "This category no longer exists.";
 
 export async function createCategory(
   _state: CategoryFormState,
@@ -59,6 +61,12 @@ export async function updateCategory(
 ): Promise<CategoryFormState> {
   await requireAdmin();
 
+  // Step 24A: `id` is a bound argument — a malformed value never reaches
+  // Postgres (see adminResourceIdSchema in ./schemas).
+  if (!adminResourceIdSchema.safeParse(id).success) {
+    return { message: CATEGORY_NOT_FOUND_MESSAGE };
+  }
+
   const validatedFields = categorySchema.safeParse({
     name: formData.get("name"),
     slug: formData.get("slug"),
@@ -71,10 +79,14 @@ export async function updateCategory(
 
   const { name, slug, description } = validatedFields.data;
   const supabase = await createClient();
-  const { error } = await supabase
+  // `.select("id")` returns the rows the UPDATE actually matched, so a
+  // valid-but-nonexistent id is detected from this one statement instead of
+  // redirecting as if the category had been saved.
+  const { data: updated, error } = await supabase
     .from("categories")
     .update({ name, slug, description: description || null })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     if (error.code === UNIQUE_VIOLATION) {
@@ -83,23 +95,38 @@ export async function updateCategory(
     console.error(`updateCategory: failed to update category "${id}"`, error);
     return { message: "Something went wrong. Please try again." };
   }
+  if (updated.length === 0) {
+    return { message: CATEGORY_NOT_FOUND_MESSAGE };
+  }
 
   revalidatePath("/", "layout");
   redirect("/admin/categories");
 }
 
 // products.category_id is `on delete set null`, so this only ever detaches
-// products from the deleted category rather than touching them.
-export async function deleteCategory(id: string) {
+// products from the deleted category rather than touching them. Bound to a
+// plain <form action> (void). Step 24A: a malformed id returns before any
+// query instead of throwing a Postgres uuid error into the admin error page,
+// and `.select("id")` reports what the DELETE actually removed, so a valid id
+// matching no row returns without revalidating rather than acting as if a
+// category was deleted.
+export async function deleteCategory(id: string): Promise<void> {
   await requireAdmin();
 
+  if (!adminResourceIdSchema.safeParse(id).success) return;
+
   const supabase = await createClient();
-  const { error } = await supabase.from("categories").delete().eq("id", id);
+  const { data: deleted, error } = await supabase
+    .from("categories")
+    .delete()
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     console.error(`deleteCategory: failed to delete category "${id}"`, error);
     throw new Error("Failed to delete category");
   }
+  if (deleted.length === 0) return;
 
   revalidatePath("/", "layout");
 }

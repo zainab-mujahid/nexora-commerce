@@ -302,20 +302,32 @@ export async function updateProductImageAltText(
 ): Promise<ProductImageActionResult> {
   await requireAdmin();
 
+  // Step 24A: the id is checked on its own first, so an invalid id gets the
+  // same "Invalid image." every other image action returns instead of the
+  // alt-text length message; only then is the alt text itself validated.
+  if (!productImageIdSchema.safeParse({ imageId }).success) {
+    return { error: "Invalid image." };
+  }
   const parsed = updateProductImageAltTextSchema.safeParse({ imageId, altText });
   if (!parsed.success) {
     return { error: "Alt text must be 300 characters or fewer." };
   }
 
+  // `.select("id")` returns the rows actually updated, so a valid id that
+  // matches no image reports "Image not found." rather than success.
   const supabase = await createClient();
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("product_images")
     .update({ alt_text: parsed.data.altText || null })
-    .eq("id", parsed.data.imageId);
+    .eq("id", parsed.data.imageId)
+    .select("id");
 
   if (error) {
     console.error(`updateProductImageAltText: failed to update image "${imageId}"`, error);
     return { error: "Something went wrong. Please try again." };
+  }
+  if (updated.length === 0) {
+    return { error: "Image not found." };
   }
 
   revalidatePath("/", "layout");

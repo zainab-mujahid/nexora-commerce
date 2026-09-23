@@ -126,6 +126,12 @@ export const confirmProductImageUploadSchema = z.object({
   contentType: z.enum(PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES),
 });
 
+// Step 24A: ids arriving as bound Server Action arguments (product/category
+// ids) are validated before any query, so a malformed value can't reach
+// Postgres as a uuid-syntax error. Same z.uuid() check as the object
+// schemas in this file.
+export const adminResourceIdSchema = z.uuid();
+
 // ---- Product image management (Step 11) ----
 export const productImageIdSchema = z.object({
   imageId: z.uuid(),
