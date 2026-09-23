@@ -515,11 +515,19 @@ begin
   -- Validate availability/stock and compute the authoritative subtotal from
   -- current database prices in one pass, while locking every cart_items/
   -- products row involved (see comment above).
+  --
+  -- Step 24C: `order by p.id` makes the product row locks be taken in
+  -- product-id order (the lock step runs above the sort). Without it the
+  -- order followed the join plan — e.g. each customer's cart insertion
+  -- order — so two checkouts (or a checkout and admin_cancel_order(), which
+  -- locks in the same id order) sharing products could lock them in opposite
+  -- orders and deadlock (40P01).
   for v_item in
     select c.product_id, c.quantity, p.price, p.stock, p.is_active
     from public.cart_items c
     join public.products p on p.id = c.product_id
     where c.user_id = v_user_id
+    order by p.id
     for update of c, p
   loop
     v_has_items := true;
@@ -706,6 +714,21 @@ begin
   if v_status not in ('pending', 'processing') then
     raise exception 'ORDER_NOT_CANCELLABLE';
   end if;
+
+  -- Step 24C: lock this order's product rows in product-id order — the same
+  -- order place_order() uses — before restoring stock. The UPDATE below
+  -- would otherwise lock them in join-plan order (the order's line order),
+  -- which can deadlock (40P01) against a concurrent checkout of the same
+  -- products taken in the opposite order.
+  perform 1
+  from public.products p
+  where p.id in (
+    select oi.product_id
+    from public.order_items oi
+    where oi.order_id = p_order_id
+  )
+  order by p.id
+  for update;
 
   update public.products p
   set stock = p.stock + oi.quantity
