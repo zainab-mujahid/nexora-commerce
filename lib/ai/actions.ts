@@ -1,12 +1,10 @@
 "use server";
 
-import { getUser } from "@/lib/auth/dal";
-
 import { shoppingContextSchema, type ShoppingContext } from "./context";
 import { getShoppingAssistantResponse } from "./assistant";
 import { classifyAiError, type AiErrorCategory } from "./errors";
 import { logAiEvent } from "./log";
-import { checkRateLimit } from "./rate-limit";
+import { consumeAiRateLimit } from "./rate-limit";
 import type { SemanticProductSearchResult } from "./retrieval";
 
 // A "use server" module's exports must all be async functions — no plain
@@ -130,20 +128,6 @@ export async function askShoppingAssistant(
     };
   }
 
-  // Step 22 Phase 8D: application-level rate limiting, enforced BEFORE any
-  // AI/provider work — checked here, after the free/cheap input-shape
-  // checks above (so a malformed request never consumes rate-limit budget)
-  // but before anything that costs real quota/compute. `identity` is
-  // derived ENTIRELY from getUser() — a server-verified, re-validated
-  // Supabase Auth lookup — never from `input` or `previousContext`, so
-  // nothing the client sends can influence which bucket is checked or
-  // fabricate a different identity to reset/bypass its own limit. See
-  // lib/ai/rate-limit.ts for the full identity-strategy and storage-model
-  // rationale (including why anonymous requests share one global bucket
-  // rather than being split per-client).
-  const user = await getUser();
-  const identity = user ? `user:${user.id}` : "anonymous";
-
   // Step 22 Phase 8F: timing starts here, after the free/cheap input-shape
   // checks above (so a malformed request that never reaches AI/rate-limit
   // work doesn't get a misleadingly "fast AI turn" log) but before the
@@ -153,11 +137,34 @@ export async function askShoppingAssistant(
   // adjustments mid-request.
   const start = performance.now();
 
-  if (!checkRateLimit(identity).allowed) {
-    // Step 22 Phase 8F: a safe rate-limit event — no limiter identity, no
-    // user id, no IP (this function never has an IP to begin with; see
-    // lib/ai/rate-limit.ts's own identity-strategy notes). `identity`
-    // itself is never logged.
+  // Step 22 Phase 8D: application-level rate limiting, enforced BEFORE any
+  // AI/provider work — checked here, after the free/cheap input-shape
+  // checks above (so a malformed request never consumes rate-limit budget)
+  // but before anything that costs real quota/compute. Step 24D: the
+  // counter lives in Postgres and the bucket key is derived there from the
+  // verified session — nothing from `input` or `previousContext` is
+  // passed, so the client can't pick, forge or reset a bucket. Called once
+  // per request; Gemini retries (lib/ai/client.ts) happen downstream and
+  // never consume another unit. See lib/ai/rate-limit.ts for the
+  // identity/storage rationale.
+  const rateLimit = await consumeAiRateLimit();
+
+  if (rateLimit.status === "unavailable") {
+    // Step 24D: fail closed. If the limiter can't be consulted, don't spend
+    // Gemini quota unmetered — the assistant is non-essential, and
+    // browsing/cart/checkout never go through this path. Only a fixed
+    // outcome label is logged, never the database error.
+    logAiEvent("error", "ai_shopping_assistant_request", {
+      outcome: "rate_limit_unavailable",
+      durationMs: Math.round(performance.now() - start),
+    });
+    return { status: "error", error: GENERIC_ERROR_MESSAGE };
+  }
+
+  if (rateLimit.status === "limited") {
+    // Step 22 Phase 8F: a safe rate-limit event — no limiter key, no user
+    // id, no IP (this function never has an IP to begin with; see
+    // lib/ai/rate-limit.ts's own identity-strategy notes).
     logAiEvent("info", "ai_shopping_assistant_request", {
       outcome: "rate_limited",
       durationMs: Math.round(performance.now() - start),

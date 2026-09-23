@@ -827,3 +827,98 @@ $$;
 -- independent of — and enforceable on top of — this database-level grant.
 revoke all on function public.match_products(extensions.vector(1536), integer, numeric, numeric, uuid) from public;
 grant execute on function public.match_products(extensions.vector(1536), integer, numeric, numeric, uuid) to anon, authenticated;
+
+-- ============================================================================
+-- Step 24D — persistent AI shopping-assistant rate limit
+--
+-- The limiter used to be an in-memory Map inside the Node process, so every
+-- restart/redeploy reset it and each app instance counted separately. The
+-- state now lives here, shared by every instance and surviving restarts.
+--
+-- One row per identity: 'user:<auth.uid()>' for a signed-in caller, or the
+-- single shared 'anonymous' row for everyone else (there is no trustworthy
+-- per-visitor identity for anonymous traffic — see lib/ai/rate-limit.ts).
+--
+-- The table is reachable ONLY through consume_ai_rate_limit() below: RLS is
+-- on with no policies, and all table privileges are revoked from the API
+-- roles (explicitly, since Supabase's default privileges can grant new
+-- public tables to anon/authenticated directly), so no client can read,
+-- reset or forge a counter.
+--
+-- Cleanup: nothing deletes rows yet. Stale rows are harmless (at most one
+-- per user who has ever used the assistant, plus 'anonymous'); the
+-- window_start index is there so a later maintenance job can delete rows
+-- idle for a long time cheaply.
+-- ============================================================================
+create table if not exists public.ai_rate_limits (
+  key           text primary key,
+  window_start  timestamptz not null,
+  request_count integer not null check (request_count >= 0)
+);
+
+create index if not exists ai_rate_limits_window_start_idx
+  on public.ai_rate_limits (window_start);
+
+alter table public.ai_rate_limits enable row level security;
+
+revoke all on table public.ai_rate_limits from public;
+revoke all on table public.ai_rate_limits from anon;
+revoke all on table public.ai_rate_limits from authenticated;
+
+-- Consumes one unit for the caller and reports whether the request may
+-- proceed. Fixed window: 5 requests per 60 seconds, same as the old
+-- in-memory limiter.
+--
+-- Takes NO parameters on purpose: the key comes from auth.uid() (the
+-- verified JWT), and the limit/window are constants here. A key, limit or
+-- window argument would let anyone calling this RPC directly reset or
+-- sidestep their own counter.
+--
+-- The single INSERT ... ON CONFLICT DO UPDATE is the whole check-and-count:
+-- concurrent calls for the same key serialize on that row, and each sees
+-- the previous call's committed count, so parallel requests can't slip past
+-- the limit. A rejected call leaves window_start alone (it doesn't extend
+-- the window) and the count stops at limit + 1.
+--
+-- clock_timestamp(), not now(): now() is the transaction start time, which
+-- for a call that waited on the row lock is earlier than the real time, and
+-- would skew the window and retry_after_ms.
+create or replace function public.consume_ai_rate_limit()
+returns table (allowed boolean, retry_after_ms integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  c_max    constant integer  := 5;
+  c_window constant interval := interval '60 seconds';
+  v_key    text := coalesce('user:' || auth.uid()::text, 'anonymous');
+  v_now    timestamptz := clock_timestamp();
+  v_count  integer;
+  v_start  timestamptz;
+begin
+  insert into public.ai_rate_limits as r (key, window_start, request_count)
+  values (v_key, v_now, 1)
+  on conflict (key) do update
+    set window_start  = case when r.window_start <= v_now - c_window
+                             then v_now else r.window_start end,
+        request_count = case when r.window_start <= v_now - c_window
+                             then 1 else least(r.request_count + 1, c_max + 1) end
+  returning r.request_count, r.window_start into v_count, v_start;
+
+  allowed := v_count <= c_max;
+  retry_after_ms := case
+    when allowed then 0
+    else least(
+      greatest(1, ceil(extract(epoch from (v_start + c_window - v_now)) * 1000)),
+      extract(epoch from c_window) * 1000
+    )::integer
+  end;
+  return next;
+end;
+$$;
+
+-- anon needs EXECUTE too: anonymous assistant requests are counted in the
+-- shared 'anonymous' row.
+revoke all on function public.consume_ai_rate_limit() from public;
+grant execute on function public.consume_ai_rate_limit() to anon, authenticated;

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createClient } from "@/lib/supabase/server";
+
 // Step 22 Phase 8D — application-level rate limiting for the AI shopping
 // assistant Server Action boundary (lib/ai/actions.ts). This is a
 // deterministic, pre-emptive gate: it rejects a request BEFORE any
@@ -8,12 +10,23 @@ import "server-only";
 // real Gemini 429 that already happened, after a call was made). Nothing
 // here calls Gemini, retries anything, or touches lib/ai/retry.ts.
 //
+// ---- Storage (Step 24D) ----
+//
+// The counters live in Postgres (public.ai_rate_limits), consumed through
+// the public.consume_ai_rate_limit() RPC — see its comment in
+// supabase/schema.sql. Unlike the previous in-memory Map, that state
+// survives Node/PM2 restarts and redeploys, and every app instance shares
+// the same counters. The limit (5 per 60s, fixed window) and the window
+// logic are defined in that function, not here.
+//
 // ---- Identity strategy ----
 //
-// Authenticated requests: keyed by the real, server-verified `user.id`
-// from lib/auth/dal.ts's getUser() (which re-validates against Supabase
-// Auth itself, not just whatever a cookie claims) — trustworthy, cannot
-// be spoofed by the client.
+// The key is derived inside the database, never passed from here: the RPC
+// takes no arguments and uses auth.uid() from the JWT that this request's
+// server Supabase client forwards (PostgREST verifies its signature), so
+// nothing the browser sends can pick, forge or reset a bucket.
+//
+// Authenticated requests: one bucket per user ('user:<id>').
 //
 // Anonymous requests: this codebase has NO verified trustworthy per-client
 // identity signal for an anonymous visitor. Checked directly before
@@ -33,82 +46,49 @@ import "server-only";
 //     raise a small amount of friction, at a disproportionate cost in new
 //     surface area for this phase.
 // Given that, every anonymous request shares ONE global bucket
-// ("anonymous") instead of being split per-visitor. This does not
+// ('anonymous') instead of being split per-visitor. This does not
 // distinguish one anonymous abuser from another, but it DOES bound the
 // worst-case total AI/provider cost anonymous traffic as a whole can
 // generate, without trusting a single byte of client-supplied data to
-// decide who's who — there is nothing here for a malicious client to
-// spoof, because the bucket key never depends on anything they send.
-//
-// ---- Storage / deployment model ----
-//
-// A plain in-memory Map, scoped to this one Node process. EXPLICITLY NOT
-// distributed production enforcement: it resets on every restart/deploy,
-// and if this app ever runs as more than one server instance/process
-// behind a load balancer, each instance enforces its own independent
-// counter — the effective limit becomes (MAX_REQUESTS_PER_WINDOW) x
-// (instance count), not one shared bound. This is a real, acknowledged
-// limitation of this phase, not something hidden — see the Phase 8D
-// report for the recommended upgrade path (a small counter table in this
-// project's existing Supabase Postgres database, which is already
-// multi-instance-shared infrastructure, rather than a new external
-// service like Redis/Upstash).
+// decide who's who.
 
-// Deliberately small and conservative: this bounds request RATE (abuse
-// protection), not total daily AI budget — that is Phase 8E's job, not
-// this phase's. A normal shopping conversation rarely sends more than a
-// couple of messages within any one minute while reading responses; 5 per
-// 60s comfortably allows that while meaningfully blocking rapid automated
-// abuse. Both constants are simple, named, adjustable values — not
-// scientifically derived — and are never influenced by anything the
-// client sends.
-const MAX_REQUESTS_PER_WINDOW = 5;
+export type RateLimitResult =
+  | { status: "allowed" }
+  | { status: "limited"; retryAfterMs: number }
+  // The limiter itself couldn't be consulted (database/network error or an
+  // unexpected response). Callers must treat this as "don't proceed" — see
+  // lib/ai/actions.ts. Deliberately carries no error detail.
+  | { status: "unavailable" };
+
+// Upper bound for retryAfterMs; must match c_window in
+// consume_ai_rate_limit().
 const WINDOW_MS = 60_000;
 
-type WindowState = { count: number; windowStart: number };
+// Consumes one rate-limit unit for the current request's caller. Call
+// exactly once per assistant request — never from inside a retry loop.
+export async function consumeAiRateLimit(): Promise<RateLimitResult> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("consume_ai_rate_limit");
+    if (error) {
+      return { status: "unavailable" };
+    }
 
-// Module-level — intentionally the ONE shared store for this process; see
-// the deployment-model note above for exactly what that does and does not
-// guarantee.
-const buckets = new Map<string, WindowState>();
+    // A RETURNS TABLE function comes back as an array of rows.
+    const row: unknown = Array.isArray(data) ? data[0] : null;
+    if (typeof row !== "object" || row === null || !("allowed" in row) || typeof row.allowed !== "boolean") {
+      return { status: "unavailable" };
+    }
+    if (row.allowed) {
+      return { status: "allowed" };
+    }
 
-export type RateLimitDecision = { allowed: true } | { allowed: false; retryAfterMs: number };
-
-// Pure with respect to its explicit inputs — `now`, the backing store, and
-// the limit/window themselves are all injectable, purely so this is
-// deterministically unit-testable without waiting for a real 60-second
-// window or mutating shared module state across test cases. Real callers
-// (lib/ai/actions.ts) never pass these — nothing client-reachable can
-// reach this function's parameters at all, since it's only ever called
-// from other server-only code with a server-derived identity string, never
-// with client-supplied count/window/bypass values.
-export function checkRateLimit(
-  identity: string,
-  options?: {
-    now?: number;
-    store?: Map<string, WindowState>;
-    maxRequests?: number;
-    windowMs?: number;
-  },
-): RateLimitDecision {
-  const now = options?.now ?? Date.now();
-  const store = options?.store ?? buckets;
-  const maxRequests = options?.maxRequests ?? MAX_REQUESTS_PER_WINDOW;
-  const windowMs = options?.windowMs ?? WINDOW_MS;
-
-  const existing = store.get(identity);
-
-  if (!existing || now - existing.windowStart >= windowMs) {
-    // First request from this identity, or its previous window has fully
-    // elapsed: start a fresh window.
-    store.set(identity, { count: 1, windowStart: now });
-    return { allowed: true };
+    const retryAfterMs = "retry_after_ms" in row ? Number(row.retry_after_ms) : NaN;
+    return {
+      status: "limited",
+      retryAfterMs: Number.isFinite(retryAfterMs) ? Math.min(Math.max(retryAfterMs, 1), WINDOW_MS) : WINDOW_MS,
+    };
+  } catch {
+    return { status: "unavailable" };
   }
-
-  if (existing.count >= maxRequests) {
-    return { allowed: false, retryAfterMs: windowMs - (now - existing.windowStart) };
-  }
-
-  existing.count += 1;
-  return { allowed: true };
 }
