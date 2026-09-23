@@ -312,17 +312,20 @@ drop policy if exists "orders_select_own_or_admin" on public.orders;
 create policy "orders_select_own_or_admin" on public.orders
   for select using (user_id = auth.uid() or public.is_admin());
 
+-- Step 23D: no customer INSERT policy. Orders are created only by
+-- place_order() (SECURITY DEFINER), which never needed one; a direct-insert
+-- path let a customer fabricate totals/prices/quantities/status. The drop
+-- stays so re-running this file removes it from an existing database.
 drop policy if exists "orders_insert_own" on public.orders;
-create policy "orders_insert_own" on public.orders
-  for insert with check (user_id = auth.uid());
 
 drop policy if exists "orders_update_admin_only" on public.orders;
 create policy "orders_update_admin_only" on public.orders
   for update using (public.is_admin()) with check (public.is_admin());
 
 -- ---- order_items ----
--- access follows the parent order: readable by its owner or an admin,
--- and only insertable alongside an order the same user just created.
+-- access follows the parent order: readable by its owner or an admin.
+-- Never insertable by a customer directly — only place_order() writes rows
+-- here (see the orders_insert_own note above).
 drop policy if exists "order_items_select_via_order" on public.order_items;
 create policy "order_items_select_via_order" on public.order_items
   for select using (
@@ -334,14 +337,6 @@ create policy "order_items_select_via_order" on public.order_items
   );
 
 drop policy if exists "order_items_insert_via_own_order" on public.order_items;
-create policy "order_items_insert_via_own_order" on public.order_items
-  for insert with check (
-    exists (
-      select 1 from public.orders
-      where orders.id = order_items.order_id
-        and orders.user_id = auth.uid()
-    )
-  );
 
 -- ============================================================================
 -- Auto-create a profile row whenever a new auth user signs up.
@@ -413,12 +408,18 @@ grant select, insert, delete on public.wishlist_items to authenticated;
 grant select, insert, update, delete on public.addresses to authenticated;
 
 -- orders: authenticated only. No delete grant — matches the RLS design;
--- orders are permanent, undeletable records.
-grant select, insert, update on public.orders to authenticated;
+-- orders are permanent, undeletable records. No insert grant (Step 23D):
+-- place_order() is the only creation path; update stays for admin status
+-- changes (RLS orders_update_admin_only). The explicit revoke is needed
+-- because re-running a narrower grant never removes an earlier one.
+grant select, update on public.orders to authenticated;
+revoke insert on public.orders from authenticated;
 
--- order_items: authenticated only, select + insert. No update/delete grant —
--- line items are immutable price/name snapshots once an order is placed.
-grant select, insert on public.order_items to authenticated;
+-- order_items: authenticated only, select only. No insert/update/delete
+-- grant — line items are written only by place_order() and are immutable
+-- price/name snapshots once an order is placed.
+grant select on public.order_items to authenticated;
+revoke insert on public.order_items from authenticated;
 
 -- ============================================================================
 -- Step 15 — Checkout: place_order()
@@ -467,6 +468,16 @@ declare
   v_subtotal  numeric(10, 2) := 0;
   v_item      record;
   v_has_items boolean := false;
+  -- Step 23D: exactly the product ids validated/priced/locked below. Every
+  -- later statement is restricted to this set: in READ COMMITTED each
+  -- statement takes a fresh snapshot, and row locks can't block a brand-new
+  -- cart_items row, so re-reading "the user's whole cart" would pick up an
+  -- item added concurrently after validation (unvalidated, unpriced in the
+  -- total, yet ordered, stock-decremented and deleted). With this set, such
+  -- an item is simply left in the cart for a later checkout. Locked rows
+  -- can't change their quantity/price meanwhile, and unique(user_id,
+  -- product_id) makes a product id identify one cart row.
+  v_product_ids uuid[] := '{}';
 begin
   if v_user_id is null then
     raise exception 'AUTH_REQUIRED';
@@ -510,6 +521,7 @@ begin
     end if;
 
     v_subtotal := v_subtotal + (v_item.price * v_item.quantity);
+    v_product_ids := v_product_ids || v_item.product_id;
   end loop;
 
   if not v_has_items then
@@ -526,14 +538,18 @@ begin
   select v_order_id, p.id, p.name, p.price, c.quantity, p.price * c.quantity
   from public.cart_items c
   join public.products p on p.id = c.product_id
-  where c.user_id = v_user_id;
+  where c.user_id = v_user_id
+    and c.product_id = any(v_product_ids);
 
   update public.products p
   set stock = p.stock - c.quantity
   from public.cart_items c
-  where c.product_id = p.id and c.user_id = v_user_id;
+  where c.product_id = p.id and c.user_id = v_user_id
+    and c.product_id = any(v_product_ids);
 
-  delete from public.cart_items where user_id = v_user_id;
+  delete from public.cart_items
+  where user_id = v_user_id
+    and product_id = any(v_product_ids);
 
   return v_order_id;
 end;
