@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Type } from "@google/genai";
+import { ThinkingLevel, Type } from "@google/genai";
 import * as z from "zod";
 
 import { generateStructuredJson } from "./client";
@@ -30,7 +30,9 @@ const MAX_REQUESTED_COUNT = 20;
 // overhead — comfortably under 400 tokens for any valid response. This
 // exists purely as a ceiling against a runaway/degenerate generation
 // (bounding worst-case cost/latency), not a tight budget that could ever
-// truncate a legitimate response into invalid JSON.
+// truncate a legitimate response into invalid JSON. Step 23B correction:
+// the model's thinking tokens count against this ceiling too, which is why
+// extractShoppingContextUpdate() pins thinkingLevel LOW (see there).
 const MAX_OUTPUT_TOKENS = 1024;
 
 // Gemini's native structured-output schema (an OpenAPI-subset object, not a
@@ -628,6 +630,13 @@ ${trimmedInput}`;
       contents,
       responseSchema: GEMINI_CONTEXT_UPDATE_RESPONSE_SCHEMA,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
+      // Step 23B: LOW, not the model default — a follow-up that switches
+      // topic (e.g. "wireless desk lamp" after shoes under $100) measured
+      // ~1,200 default-level thinking tokens, which count against
+      // MAX_OUTPUT_TOKENS and truncated the JSON; LOW measured 0-~500
+      // (mostly under ~250) with the same extracted result. Extraction
+      // needs no deep reasoning.
+      thinkingLevel: ThinkingLevel.LOW,
       operation: "intent_generation",
     });
   } catch (err) {

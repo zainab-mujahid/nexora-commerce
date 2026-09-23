@@ -1,8 +1,9 @@
 import "server-only";
 
-import { GoogleGenAI, type Schema } from "@google/genai";
+import { FinishReason, GoogleGenAI, type Schema, type ThinkingLevel } from "@google/genai";
 
 import { GEMINI_API_KEY } from "./env";
+import { AiInvalidResponseError } from "./errors";
 import { logAiEvent, type AiOperation } from "./log";
 import { withAiRetry } from "./retry";
 
@@ -145,6 +146,13 @@ export async function generateStructuredJson(params: {
   // both current callers pass a fixed module-level constant, never a
   // value derived from user input.
   maxOutputTokens: number;
+  // Step 23B: optional per-call thinking depth. On GENERATION_MODEL, thinking
+  // tokens count against maxOutputTokens — at the model's default level,
+  // lib/ai/intent.ts's context-update extraction measured ~1,200 thinking
+  // tokens for some follow-ups, exhausting its 1024 ceiling before the JSON
+  // finished (finishReason MAX_TOKENS). Omitted = the model's own default,
+  // so callers that don't pass it (lib/ai/recommend.ts) are unchanged.
+  thinkingLevel?: ThinkingLevel;
   // Step 22 Phase 8F: same purpose/contract as generateEmbedding()'s own
   // `operation` parameter above — a fixed, server-controlled label used
   // only for structured observability.
@@ -155,7 +163,8 @@ export async function generateStructuredJson(params: {
   // generateEmbedding()'s own failureStage above — derived purely from
   // which control-flow branch below threw, never from content, logged
   // only on the error path, success log unchanged.
-  let failureStage: "provider_request" | "empty_response" | "malformed_json" = "provider_request";
+  let failureStage: "provider_request" | "truncated" | "empty_response" | "malformed_json" =
+    "provider_request";
   try {
     // Step 22 Phase 8B: retry wraps ONLY this raw provider round-trip. The
     // empty-response and malformed-JSON checks below run strictly after a
@@ -173,10 +182,23 @@ export async function generateStructuredJson(params: {
             responseMimeType: "application/json",
             responseSchema: params.responseSchema,
             maxOutputTokens: params.maxOutputTokens,
+            ...(params.thinkingLevel && { thinkingConfig: { thinkingLevel: params.thinkingLevel } }),
           },
         }),
       { operation: params.operation },
     );
+
+    // Checked before anything reads the text: output cut off at
+    // maxOutputTokens is at best a JSON prefix, so it's reported as its own
+    // stage rather than surfacing later as "malformed_json". Like the parse
+    // failure below, it's the model's output failing our contract, so both
+    // throw AiInvalidResponseError (-> "invalid_response" via
+    // classifyAiError's cause walk), never a retryable category — and
+    // neither message carries any response content.
+    if (response.candidates?.[0]?.finishReason === FinishReason.MAX_TOKENS) {
+      failureStage = "truncated";
+      throw new AiInvalidResponseError("Gemini's structured response was truncated.");
+    }
 
     const text = response.text;
     if (!text) {
@@ -189,7 +211,7 @@ export async function generateStructuredJson(params: {
       parsed = JSON.parse(text);
     } catch {
       failureStage = "malformed_json";
-      throw new Error("Gemini returned malformed JSON.");
+      throw new AiInvalidResponseError("Gemini returned malformed JSON.");
     }
 
     // Step 22 Phase 8F: one safe, structured event per call — success or
