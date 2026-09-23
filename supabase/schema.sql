@@ -420,11 +420,21 @@ grant select, insert, update, delete on public.addresses to authenticated;
 
 -- orders: authenticated only. No delete grant — matches the RLS design;
 -- orders are permanent, undeletable records. No insert grant (Step 23D):
--- place_order() is the only creation path; update stays for admin status
--- changes (RLS orders_update_admin_only). The explicit revoke is needed
+-- place_order() is the only creation path. The explicit revokes are needed
 -- because re-running a narrower grant never removes an earlier one.
-grant select, update on public.orders to authenticated;
+--
+-- UPDATE is column-level: only status/updated_at, the two columns the admin
+-- status change (lib/admin/orders.ts) writes; RLS orders_update_admin_only
+-- still decides who and which rows. user_id, totals, shipping_address and
+-- created_at are fixed once place_order() writes them. Revoking table-level
+-- UPDATE also drops any column-level UPDATE grants, so the revoke has to
+-- come before the column grant. place_order() and admin_cancel_order() are
+-- SECURITY DEFINER (run as the table owner), so this doesn't restrict them.
+grant select on public.orders to authenticated;
 revoke insert on public.orders from authenticated;
+revoke update on public.orders from authenticated;
+revoke update on public.orders from anon;
+grant update (status, updated_at) on public.orders to authenticated;
 
 -- order_items: authenticated only, select only. No insert/update/delete
 -- grant — line items are written only by place_order() and are immutable
