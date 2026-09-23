@@ -318,9 +318,20 @@ create policy "orders_select_own_or_admin" on public.orders
 -- stays so re-running this file removes it from an existing database.
 drop policy if exists "orders_insert_own" on public.orders;
 
+-- Step 24B: `cancelled` is terminal and can only be entered through
+-- admin_cancel_order(), which restores stock in the same transaction. USING
+-- makes a cancelled row invisible as an UPDATE target (it can never be
+-- revived and then cancelled again for a second stock restore); WITH CHECK
+-- rejects any direct UPDATE that would produce `cancelled` (which would skip
+-- the restore). Moves among pending/processing/shipped/delivered — including
+-- corrections like shipped -> pending — stay allowed. admin_cancel_order()
+-- is SECURITY DEFINER and runs as the table owner, which this (non-forced)
+-- policy does not apply to.
 drop policy if exists "orders_update_admin_only" on public.orders;
 create policy "orders_update_admin_only" on public.orders
-  for update using (public.is_admin()) with check (public.is_admin());
+  for update
+  using (public.is_admin() and status <> 'cancelled')
+  with check (public.is_admin() and status <> 'cancelled');
 
 -- ---- order_items ----
 -- access follows the parent order: readable by its owner or an admin.
@@ -652,14 +663,19 @@ grant execute on function public.get_own_wishlist_unavailable_product_names() to
 -- or fail together, for the same reason place_order() itself is one atomic
 -- function rather than several client calls (see the comment above it).
 --
--- Unlike place_order()/get_own_cart_product_names(), this one is NOT
--- SECURITY DEFINER: an admin's own session already has RLS-granted UPDATE
--- on both orders (orders_update_admin_only) and products (products_write_admin),
--- so there's no privilege gap to bridge — this function only buys atomicity
--- for those two admin-authorized writes, not elevated access. The explicit
--- is_admin() check exists only so a non-admin caller gets a clear error
--- instead of a silent no-op (RLS would otherwise just filter both writes
--- down to zero affected rows).
+-- Step 24B: SECURITY DEFINER. orders_update_admin_only now refuses any
+-- direct UPDATE that sets status to 'cancelled' (and any UPDATE of an
+-- already-cancelled row), so this function is the ONLY way an order becomes
+-- cancelled — which is what guarantees stock is restored exactly once.
+-- Running as the table owner (not subject to that non-forced policy) is how
+-- it performs the one write the policy deliberately forbids everyone else.
+-- Callers cannot impersonate that context: API roles can't switch to the
+-- owner role, and there is no session flag involved.
+--
+-- Because SECURITY DEFINER bypasses the caller's RLS on both orders and
+-- products, the is_admin() check below is the function's ONLY authorization
+-- gate and must stay the first statement. search_path is pinned, and
+-- EXECUTE is limited to authenticated (revoked from PUBLIC and anon).
 --
 -- Cancellation is only allowed from 'pending' or 'processing'. Once an
 -- order has shipped, the stock has physically left the building — silently
@@ -669,6 +685,7 @@ grant execute on function public.get_own_wishlist_unavailable_product_names() to
 create or replace function public.admin_cancel_order(p_order_id uuid)
 returns void
 language plpgsql
+security definer
 set search_path = public
 as $$
 declare
@@ -703,6 +720,7 @@ end;
 $$;
 
 revoke all on function public.admin_cancel_order(uuid) from public;
+revoke all on function public.admin_cancel_order(uuid) from anon;
 grant execute on function public.admin_cancel_order(uuid) to authenticated;
 
 -- ============================================================================
