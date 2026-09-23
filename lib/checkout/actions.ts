@@ -13,6 +13,10 @@ type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 const UNEXPECTED_ERROR_MESSAGE =
   "Something went wrong placing your order. Please try again.";
 
+// For a call that threw outright (see placeOrder's try/catch) — never the
+// raw exception text.
+const THROWN_ERROR_MESSAGE = "We couldn't place your order. Please try again.";
+
 // place_order() raises 'CODE' or 'CODE:<product_id>' (see supabase/schema.sql)
 // so the client-visible message never needs to be more than that — this
 // turns it into something a customer can act on. Falls back to the generic
@@ -63,27 +67,41 @@ export async function placeOrder(
     return { error: "Select a shipping address." };
   }
 
-  const supabase = await createClient();
+  let orderId: string;
+  // Only the database work is inside this try: requireUser() above and
+  // redirect() below signal Next.js control flow by throwing, and must never
+  // be caught here. A *thrown* failure (network/provider outage, as opposed
+  // to place_order() returning an error) becomes a generic form message
+  // instead of escaping to an error page; place_order() runs as a single
+  // transaction, so a throw never leaves a partial order behind.
+  try {
+    const supabase = await createClient();
 
-  // Every value this depends on — the caller's identity, address ownership,
-  // cart contents, product availability/stock, and prices — is reloaded and
-  // re-validated inside place_order() itself; nothing from the browser is
-  // trusted beyond "which address id was picked". See supabase/schema.sql
-  // for why this is a single atomic RPC rather than several client calls.
-  const { data: orderId, error } = await supabase.rpc("place_order", {
-    p_address_id: parsed.data.addressId,
-  });
+    // Every value this depends on — the caller's identity, address ownership,
+    // cart contents, product availability/stock, and prices — is reloaded and
+    // re-validated inside place_order() itself; nothing from the browser is
+    // trusted beyond "which address id was picked". See supabase/schema.sql
+    // for why this is a single atomic RPC rather than several client calls.
+    const { data, error } = await supabase.rpc("place_order", {
+      p_address_id: parsed.data.addressId,
+    });
 
-  if (error) {
-    const message = await describeError(supabase, error.message);
-    // Only log truly unexpected failures — the known validation outcomes
-    // (empty cart, stale address, a product going unavailable/out of stock
-    // between page load and submit) are expected, user-facing outcomes, not
-    // application errors.
-    if (message === UNEXPECTED_ERROR_MESSAGE) {
-      console.error("placeOrder: place_order RPC failed", error);
+    if (error) {
+      const message = await describeError(supabase, error.message);
+      // Only log truly unexpected failures — the known validation outcomes
+      // (empty cart, stale address, a product going unavailable/out of stock
+      // between page load and submit) are expected, user-facing outcomes, not
+      // application errors.
+      if (message === UNEXPECTED_ERROR_MESSAGE) {
+        console.error("placeOrder: place_order RPC failed", error);
+      }
+      return { error: message };
     }
-    return { error: message };
+
+    orderId = data;
+  } catch (err) {
+    console.error("placeOrder: place_order call threw", err);
+    return { error: THROWN_ERROR_MESSAGE };
   }
 
   revalidatePath("/cart");

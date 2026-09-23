@@ -1,4 +1,5 @@
 import { cache } from "react";
+import * as z from "zod";
 
 import { requireUser } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
@@ -72,9 +73,19 @@ export const getOrders = cache(async (): Promise<OrderListItem[]> => {
 const ORDER_DETAIL_SELECT =
   "id, status, subtotal, total, shipping_address, created_at, items:order_items(id, product_id, product_name, unit_price, quantity, subtotal)";
 
+// orderId comes straight from the URL. Postgres rejects a non-UUID string
+// for a uuid column with an error (not an empty result), which the by-id
+// lookups below would surface as a 500 — so a malformed id is answered the
+// same way as a well-formed id that matches nothing (null -> the page's
+// notFound()), without ever reaching the database. Same z.uuid() check
+// lib/admin/schemas.ts already applies to orderId in admin actions.
+const orderIdSchema = z.uuid();
+
 export const getOrderById = cache(
   async (orderId: string): Promise<OrderDetail | null> => {
     const user = await requireUser();
+    if (!orderIdSchema.safeParse(orderId).success) return null;
+
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("orders")
@@ -141,6 +152,9 @@ export const getAdminOrders = cache(async (): Promise<AdminOrderListItem[]> => {
 
 export const getAdminOrderById = cache(
   async (orderId: string): Promise<OrderDetail | null> => {
+    // See orderIdSchema above — same malformed-URL-id -> not-found handling.
+    if (!orderIdSchema.safeParse(orderId).success) return null;
+
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("orders")
