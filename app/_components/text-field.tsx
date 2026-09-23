@@ -6,6 +6,7 @@ export function TextField({
   defaultValue,
   min,
   step,
+  required,
   placeholder,
   hint,
   errors,
@@ -17,6 +18,7 @@ export function TextField({
   defaultValue?: string | number;
   min?: string | number;
   step?: string | number;
+  required?: boolean;
   placeholder?: string;
   hint?: string;
   errors?: string[];
@@ -34,6 +36,7 @@ export function TextField({
         defaultValue={defaultValue}
         min={min}
         step={step}
+        required={required}
         placeholder={placeholder}
         aria-invalid={errors ? true : undefined}
         aria-describedby={errors ? `${name}-error` : undefined}

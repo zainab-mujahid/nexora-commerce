@@ -38,6 +38,18 @@ export type CategoryFormState =
     }
   | undefined;
 
+// Step 23E: z.coerce.number() turns "" and null into 0 (Number("") === 0),
+// so a blank or missing price/stock field used to pass validation as zero —
+// clearing the price while editing silently made a product free. Blank and
+// missing values become undefined first, which coerces to NaN and fails with
+// the field's normal "Enter a valid …" message. An explicit 0 / "0" is
+// untouched and still valid (zero price/stock remain allowed by design).
+function blankToUndefined(value: unknown) {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
+  return value;
+}
+
 export const productSchema = z.object({
   name: z
     .string()
@@ -51,13 +63,19 @@ export const productSchema = z.object({
     .max(2000, { error: "Description must be 2000 characters or fewer." })
     .optional()
     .or(z.literal("")),
-  price: z.coerce
-    .number({ error: "Enter a valid price." })
-    .min(0, { error: "Price must be zero or more." }),
-  stock: z.coerce
-    .number({ error: "Enter a valid stock quantity." })
-    .int({ error: "Stock must be a whole number." })
-    .min(0, { error: "Stock must be zero or more." }),
+  price: z.preprocess(
+    blankToUndefined,
+    z.coerce
+      .number({ error: "Enter a valid price." })
+      .min(0, { error: "Price must be zero or more." }),
+  ),
+  stock: z.preprocess(
+    blankToUndefined,
+    z.coerce
+      .number({ error: "Enter a valid stock quantity." })
+      .int({ error: "Stock must be a whole number." })
+      .min(0, { error: "Stock must be zero or more." }),
+  ),
   categoryId: z
     .union([z.uuid(), z.literal("")])
     .optional()

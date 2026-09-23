@@ -60,6 +60,7 @@ export function ProductForm({
           type="number"
           min="0"
           step="0.01"
+          required
           defaultValue={product?.price}
           errors={state?.errors?.price}
         />
@@ -69,6 +70,7 @@ export function ProductForm({
           type="number"
           min="0"
           step="1"
+          required
           defaultValue={product?.stock}
           errors={state?.errors?.stock}
         />
