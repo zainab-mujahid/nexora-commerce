@@ -68,6 +68,7 @@ function toAssistantMessage(id: string, result: AssistantTurnResult): AssistantM
 // SSR behavior of `children` itself changes.
 export function AiShoppingAssistant({
   recommendationsSectionClassName = "",
+  catalogKey,
   children,
 }: {
   // Outer className for the "AI Recommendations" <section>. /products relies
@@ -76,6 +77,11 @@ export function AiShoppingAssistant({
   // mx-auto/max-w-6xl/px-6 to match how app/_components/featured-products.tsx
   // styles itself.
   recommendationsSectionClassName?: string;
+  // Identifies the catalog view `children` currently renders (/products
+  // passes its filter/sort/page href; Home passes nothing). A change means
+  // the customer navigated the catalog — e.g. clicked a category pill — so
+  // the new grid must be shown instead of stale recommendations.
+  catalogKey?: string;
   children: ReactNode;
 }) {
   const [transcript, setTranscript] = useState<AssistantMessage[]>([]);
@@ -102,6 +108,33 @@ export function AiShoppingAssistant({
   const [inputValue, setInputValue] = useState("");
   const [isPending, startTransition] = useTransition();
   const messagesEndRef = useRef<HTMLLIElement>(null);
+
+  // Same-route navigations (/products?category=… soft navigations) re-render
+  // this instance with new `children` but keep all of its state, so without
+  // this the AI Recommendations section would keep hiding the new grid.
+  // Dismissing exactly as "View All Products" does (adjusting state during
+  // render when a prop changes) leaves transcript/shoppingContext/isOpen
+  // untouched, and the next "ok" result still takes over as usual.
+  const [prevCatalogKey, setPrevCatalogKey] = useState(catalogKey);
+  if (catalogKey !== prevCatalogKey) {
+    setPrevCatalogKey(catalogKey);
+    setViewAllProducts(true);
+  }
+
+  // catalogKey can't see a click on the already-active pill (same URL), so
+  // an explicit click on a link inside a page's `data-catalog-nav` element
+  // (/products' category pills; Home has none) is itself treated as intent
+  // to view the catalog. Only clicks next/link handled as a client-side
+  // navigation count (it calls preventDefault then) — a ctrl/middle-click
+  // opening a new tab leaves this view alone.
+  useEffect(() => {
+    function handleClick(event: MouseEvent) {
+      if (!event.defaultPrevented || !(event.target instanceof Element)) return;
+      if (event.target.closest("[data-catalog-nav] a")) setViewAllProducts(true);
+    }
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, []);
 
   const showRecommendations = recommendations.length > 0 && !viewAllProducts;
 

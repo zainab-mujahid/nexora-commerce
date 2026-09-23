@@ -115,7 +115,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       </form>
 
       {categories.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div data-catalog-nav className="flex flex-wrap gap-2">
           <Link
             href={buildHref(currentParams, { category: undefined })}
             className={`rounded-full border px-3 py-1 text-xs font-medium ${
@@ -145,9 +145,12 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       )}
 
       {/* Independent of the server-rendered filters/grid: per-browser AI
-          recommendations/chat/view state, unaffected by search/filter/sort/
-          pagination. The normal catalog content below (heading + grid/
-          EmptyState + pagination) is passed as `children` — already fully
+          recommendations/chat/view state. Chat/context survive search/
+          filter/sort/pagination navigations, but catalogKey changing on
+          such a navigation dismisses any showing recommendations so the new
+          grid is visible (a later AI answer takes over again). The normal
+          catalog content below (heading + grid/EmptyState + pagination) is
+          passed as `children` — already fully
           server-rendered here, using this request's `products`/`page`/
           `totalPages` — and AiShoppingAssistant only decides whether to
           show it or the AI Recommendations section in its place. Existing
@@ -155,7 +158,9 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
           decision. No recommendationsSectionClassName — this relies on this
           page's own <main> (max-w-6xl/gap-6/padding) for the "AI
           Recommendations" section's container, same as before. */}
-      <AiShoppingAssistant>
+      <AiShoppingAssistant
+        catalogKey={buildHref(currentParams, { page: page > 1 ? String(page) : undefined })}
+      >
         <div className="border-t border-black/10 pt-6 dark:border-white/10">
           <h2 className="text-lg font-semibold tracking-tight">All Products</h2>
         </div>
