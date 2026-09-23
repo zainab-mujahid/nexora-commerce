@@ -21,6 +21,29 @@ export async function addToWishlist(productId: string): Promise<WishlistActionSt
 
   const supabase = await createClient();
 
+  // Same data-authority rule as addToCart(): a direct/crafted call must not
+  // wishlist a product the storefront wouldn't offer. RLS already returns
+  // no row for an inactive product to a non-admin (and none exists for an
+  // unknown id); is_active is still checked because an admin's session can
+  // see inactive rows. Stock is deliberately NOT checked — an active but
+  // out-of-stock product is a legitimate thing to wishlist.
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("id, is_active")
+    .eq("id", parsed.data.productId)
+    .maybeSingle();
+
+  if (productError) {
+    console.error(
+      `addToWishlist: failed to look up product "${parsed.data.productId}"`,
+      productError,
+    );
+    return { error: "Something went wrong. Please try again." };
+  }
+  if (!product || !product.is_active) {
+    return { error: "This product is not available." };
+  }
+
   // wishlist_items has unique(user_id, product_id) — an upsert that ignores
   // the duplicate treats re-adding an already-wishlisted product as a
   // harmless no-op rather than a constraint-violation error.

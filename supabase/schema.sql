@@ -587,6 +587,48 @@ revoke all on function public.get_own_cart_product_names() from public;
 grant execute on function public.get_own_cart_product_names() to authenticated;
 
 -- ============================================================================
+-- Step 23C — get_own_wishlist_unavailable_product_names()
+--
+-- Same RLS interaction as get_own_cart_product_names() above, for
+-- wishlist_items: once a wishlisted product is deactivated, the customer's
+-- own wishlist_items -> products embed comes back null, leaving /wishlist
+-- unable to say which product a line was.
+--
+-- Same narrow exception, deliberately narrower still: SECURITY DEFINER so
+-- it can read the product regardless of is_active, but it returns only the
+-- name, only for a product the caller's own wishlist_items references
+-- (`w.user_id = auth.uid()` — no user id is ever accepted as input), and
+-- only while that product is inactive (`not p.is_active`) — an active one
+-- is already readable through the normal RLS-scoped query, so there's no
+-- reason for this function to return it. No price/stock/description/
+-- category/slug. Removing the wishlist row removes the only path to the
+-- name. auth.uid() is null for an unauthenticated caller, so the join
+-- matches nothing even if the call were allowed. Images need nothing from
+-- here: product_images_select_all is already `using (true)` (see the
+-- comment on get_own_cart_product_names() above).
+-- ============================================================================
+create or replace function public.get_own_wishlist_unavailable_product_names()
+returns table (product_id uuid, name text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p.id, p.name
+  from public.wishlist_items w
+  join public.products p on p.id = w.product_id
+  where w.user_id = auth.uid()
+    and not p.is_active;
+$$;
+
+-- Revoked from anon explicitly as well as from PUBLIC: Supabase's default
+-- privileges can grant EXECUTE on new public-schema functions to anon
+-- directly, which revoking from PUBLIC alone doesn't remove.
+revoke all on function public.get_own_wishlist_unavailable_product_names() from public;
+revoke all on function public.get_own_wishlist_unavailable_product_names() from anon;
+grant execute on function public.get_own_wishlist_unavailable_product_names() to authenticated;
+
+-- ============================================================================
 -- Step 18 — Admin Order Management: admin_cancel_order()
 --
 -- Cancelling an order has to update orders.status AND restore the stock

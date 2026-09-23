@@ -31,6 +31,34 @@ export default async function WishlistPage() {
       ) : (
         <ul className="flex flex-col gap-4">
           {items.map((item) => {
+            // The product was deactivated after being wishlisted and RLS
+            // (products_select_active_or_admin) now hides it from this
+            // customer — see WishlistItem["product"] in
+            // lib/wishlist/queries.ts. Only item.unavailableProduct's name
+            // and one image are shown (generic fallback if that lookup came
+            // back empty) — no link, price, stock, or Move to cart; Remove
+            // stays available so the customer can clear the line.
+            if (!item.product) {
+              const label = item.unavailableProduct;
+              return (
+                <li
+                  key={item.id}
+                  className="flex gap-4 rounded-md border border-black/10 p-4 opacity-70 dark:border-white/10"
+                >
+                  <ProductImageDisplay
+                    images={label?.images ?? []}
+                    alt={label?.name ?? "Unavailable product"}
+                    className="h-24 w-24 shrink-0 rounded-md"
+                  />
+                  <div className="flex flex-1 flex-col gap-2">
+                    <p className="font-medium">{label?.name ?? "Unavailable item"}</p>
+                    <p className="text-sm text-red-600">No longer available.</p>
+                    <RemoveWishlistItemButton wishlistItemId={item.id} />
+                  </div>
+                </li>
+              );
+            }
+
             const isUnavailable = !item.product.is_active || item.product.stock <= 0;
 
             return (
