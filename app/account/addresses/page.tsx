@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 
 import { EmptyState } from "@/app/_components/empty-state";
 import { requireUser } from "@/lib/auth/dal";
-import { formatPhoneNumber } from "@/lib/addresses/format";
 import { getAddresses } from "@/lib/addresses/queries";
 
 import { DeleteAddressButton } from "./delete-address-button";
@@ -56,9 +55,6 @@ export default async function AddressesPage() {
                         Default
                       </span>
                     )}
-                  </span>
-                  <span className="text-foreground/70">
-                    {formatPhoneNumber(address.phone)}
                   </span>
                   <span className="text-foreground/70">
                     {address.line1}

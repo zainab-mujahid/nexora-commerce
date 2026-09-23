@@ -36,16 +36,6 @@ export function AddressForm({
         errors={state?.errors?.fullName}
       />
       <TextField
-        label="Phone"
-        name="phone"
-        type="tel"
-        autoComplete="tel"
-        defaultValue={address?.phone}
-        placeholder="+923001234567"
-        hint="Include the country code, e.g. +923001234567 (Pakistan) or +14155552671 (US)."
-        errors={state?.errors?.phone}
-      />
-      <TextField
         label="Address line 1"
         name="line1"
         autoComplete="address-line1"

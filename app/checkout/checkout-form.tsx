@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useActionState, useState } from "react";
 
 import { ProductImageDisplay } from "@/app/_components/product-image-display";
-import { formatPhoneNumber } from "@/lib/addresses/format";
 import type { Address } from "@/lib/addresses/queries";
 import { formatPrice } from "@/lib/catalog/format";
 import type { CartItem } from "@/lib/cart/queries";
@@ -71,7 +70,6 @@ export function CheckoutForm({
                         </span>
                       )}
                     </span>
-                    <span className="text-foreground/70">{formatPhoneNumber(address.phone)}</span>
                     <span className="text-foreground/70">
                       {address.line1}
                       {address.line2 ? `, ${address.line2}` : ""}

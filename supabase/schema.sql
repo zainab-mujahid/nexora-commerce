@@ -151,7 +151,6 @@ create table if not exists public.addresses (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references auth.users (id) on delete cascade,
   full_name   text not null,
-  phone       text not null,
   line1       text not null,
   line2       text,
   city        text not null,
@@ -161,6 +160,10 @@ create table if not exists public.addresses (
   is_default  boolean not null default false,
   created_at  timestamptz not null default now()
 );
+
+-- Nexora no longer collects a phone number. Dropped here too so re-running
+-- this file on a database created before that change removes the column.
+alter table public.addresses drop column if exists phone;
 
 create index if not exists addresses_user_id_idx on public.addresses (user_id);
 
@@ -506,7 +509,6 @@ begin
 
   select jsonb_build_object(
     'full_name', a.full_name,
-    'phone', a.phone,
     'line1', a.line1,
     'line2', a.line2,
     'city', a.city,

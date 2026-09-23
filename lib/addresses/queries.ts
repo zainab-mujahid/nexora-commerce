@@ -6,7 +6,6 @@ import { createClient } from "@/lib/supabase/server";
 export type Address = {
   id: string;
   full_name: string;
-  phone: string;
   line1: string;
   line2: string | null;
   city: string;
@@ -17,7 +16,7 @@ export type Address = {
 };
 
 const ADDRESS_SELECT =
-  "id, full_name, phone, line1, line2, city, state, postal_code, country, is_default";
+  "id, full_name, line1, line2, city, state, postal_code, country, is_default";
 
 // RLS (addresses_owner_only) already scopes every row to auth.uid(), but
 // this explicit .eq is the same defense-in-depth the cart/wishlist queries

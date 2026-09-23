@@ -14,7 +14,6 @@ type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 function parseAddressFields(formData: FormData) {
   return addressSchema.safeParse({
     fullName: formData.get("fullName"),
-    phone: formData.get("phone"),
     line1: formData.get("line1"),
     line2: formData.get("line2"),
     city: formData.get("city"),
@@ -148,12 +147,11 @@ export async function createAddress(
     await clearExistingDefault(supabase, user.id);
   }
 
-  const { fullName, phone, line1, line2, city, state, postalCode, country } =
+  const { fullName, line1, line2, city, state, postalCode, country } =
     validatedFields.data;
   const { error } = await supabase.from("addresses").insert({
     user_id: user.id,
     full_name: fullName,
-    phone,
     line1,
     line2: line2 || null,
     city,
@@ -215,13 +213,12 @@ export async function updateAddress(
     await clearExistingDefault(supabase, user.id);
   }
 
-  const { fullName, phone, line1, line2, city, state, postalCode, country } =
+  const { fullName, line1, line2, city, state, postalCode, country } =
     validatedFields.data;
   const { error } = await supabase
     .from("addresses")
     .update({
       full_name: fullName,
-      phone,
       line1,
       line2: line2 || null,
       city,

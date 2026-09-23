@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { formatPhoneNumber } from "@/lib/addresses/format";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getOrderById } from "@/lib/orders/queries";
@@ -55,7 +54,6 @@ export default async function OrderDetailPage({
       <section className="flex flex-col gap-2 rounded-md border border-black/10 p-4 text-sm dark:border-white/10">
         <h2 className="font-medium">Shipping address</h2>
         <p>{address.full_name}</p>
-        <p className="text-foreground/70">{formatPhoneNumber(address.phone)}</p>
         <p className="text-foreground/70">
           {address.line1}
           {address.line2 ? `, ${address.line2}` : ""}

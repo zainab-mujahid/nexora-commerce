@@ -6,7 +6,6 @@ import { createClient } from "@/lib/supabase/server";
 
 export type OrderShippingAddress = {
   full_name: string;
-  phone: string;
   line1: string;
   line2: string | null;
   city: string;
