@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 
 import { TextField } from "@/app/_components/text-field";
+import { NameSlugFields } from "@/app/admin/_components/name-slug-fields";
+import { submitWithoutReset } from "@/app/admin/_components/submit-without-reset";
 import { createProduct, updateProduct } from "@/lib/admin/products";
 import type { Category, ProductDetail } from "@/lib/catalog/types";
 
@@ -19,18 +21,15 @@ export function ProductForm({
   const [state, formAction, pending] = useActionState(action, undefined);
 
   return (
-    <form action={formAction} className="flex max-w-lg flex-col gap-4">
-      <TextField
-        label="Name"
-        name="name"
-        defaultValue={product?.name}
-        errors={state?.errors?.name}
-      />
-      <TextField
-        label="Slug"
-        name="slug"
-        defaultValue={product?.slug}
-        errors={state?.errors?.slug}
+    <form
+      action={formAction}
+      onSubmit={submitWithoutReset(formAction)}
+      className="flex max-w-lg flex-col gap-4"
+    >
+      <NameSlugFields
+        initialName={product?.name}
+        initialSlug={product?.slug}
+        errors={state?.errors}
       />
 
       <div className="flex flex-col gap-1.5">

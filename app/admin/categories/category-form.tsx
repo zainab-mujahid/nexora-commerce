@@ -2,7 +2,8 @@
 
 import { useActionState } from "react";
 
-import { TextField } from "@/app/_components/text-field";
+import { NameSlugFields } from "@/app/admin/_components/name-slug-fields";
+import { submitWithoutReset } from "@/app/admin/_components/submit-without-reset";
 import { createCategory, updateCategory } from "@/lib/admin/categories";
 import type { Category } from "@/lib/catalog/types";
 
@@ -13,18 +14,15 @@ export function CategoryForm({ category }: { category?: Category }) {
   const [state, formAction, pending] = useActionState(action, undefined);
 
   return (
-    <form action={formAction} className="flex max-w-md flex-col gap-4">
-      <TextField
-        label="Name"
-        name="name"
-        defaultValue={category?.name}
-        errors={state?.errors?.name}
-      />
-      <TextField
-        label="Slug"
-        name="slug"
-        defaultValue={category?.slug}
-        errors={state?.errors?.slug}
+    <form
+      action={formAction}
+      onSubmit={submitWithoutReset(formAction)}
+      className="flex max-w-md flex-col gap-4"
+    >
+      <NameSlugFields
+        initialName={category?.name}
+        initialSlug={category?.slug}
+        errors={state?.errors}
       />
 
       <div className="flex flex-col gap-1.5">
