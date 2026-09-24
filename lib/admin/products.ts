@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import * as z from "zod";
 
-import { generateAndStoreProductEmbedding } from "@/lib/ai/product-embeddings";
+import {
+  ensureProductEmbeddingCurrent,
+  generateAndStoreProductEmbedding,
+} from "@/lib/ai/product-embeddings";
 import { requireAdmin } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
 
@@ -80,15 +83,10 @@ export async function createProduct(
 
   // AI failure must never break core product creation: the product row
   // above has already committed successfully by this point regardless of
-  // what happens next. generateAndStoreProductEmbedding() never throws and
-  // leaves embedding as its column default (NULL) on any failure, so this
-  // is safe to await without any try/catch of its own here.
-  await generateAndStoreProductEmbedding({
-    id: created.id,
-    name,
-    description: description || null,
-    categoryId,
-  });
+  // what happens next. ensureProductEmbeddingCurrent() never throws; on
+  // failure the embedding stays NULL and the failure time is recorded, so
+  // this is safe to await without any try/catch of its own here.
+  await ensureProductEmbeddingCurrent(created.id);
 
   revalidatePath("/", "layout");
   redirect("/admin/products");
@@ -115,25 +113,6 @@ export async function updateProduct(
 
   const { name, slug, description, price, stock, categoryId } = validatedFields.data;
   const supabase = await createClient();
-
-  // Read before write, solely to detect afterward whether a *semantic*
-  // field (name/description/category) actually changed — never used to
-  // block or alter the update itself. If this read fails, semanticFieldsChanged
-  // below stays false: an inability to prove something changed must not be
-  // treated as "it changed," so the safer default is to skip regeneration
-  // rather than risk an unnecessary/incorrect embedding call.
-  const { data: existingProduct, error: existingError } = await supabase
-    .from("products")
-    .select("name, description, category_id")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (existingError) {
-    console.error(
-      `updateProduct: failed to load existing product "${id}" for embedding comparison`,
-      existingError,
-    );
-  }
 
   // `.select("id")` returns the rows the UPDATE actually matched, so a
   // valid-but-nonexistent id (e.g. deleted in another tab) is detected from
@@ -163,28 +142,14 @@ export async function updateProduct(
     return { message: PRODUCT_NOT_FOUND_MESSAGE };
   }
 
-  // Regenerate only on a real semantic change (name/description/category) —
-  // never for price/stock/is_active, which are intentionally excluded from
-  // embedding content entirely (see buildProductEmbeddingText). The update
-  // above has already committed successfully by this point regardless of
-  // what happens next: generateAndStoreProductEmbedding() never throws, and
-  // on failure leaves the previous embedding (or NULL) exactly as it was —
-  // it never rolls back or blocks this otherwise-valid edit.
-  const semanticFieldsChanged =
-    !existingError &&
-    existingProduct !== null &&
-    (existingProduct.name !== name ||
-      (existingProduct.description ?? null) !== (description || null) ||
-      existingProduct.category_id !== categoryId);
-
-  if (semanticFieldsChanged) {
-    await generateAndStoreProductEmbedding({
-      id,
-      name,
-      description: description || null,
-      categoryId,
-    });
-  }
+  // Regenerates only when the embedding no longer matches the saved
+  // name/description/category (compared by source hash) — a slug, price,
+  // stock or is_active change leaves the hash equal and makes no Gemini
+  // call. The update above has already committed successfully by this
+  // point: ensureProductEmbeddingCurrent() never throws, and on failure
+  // leaves the previous embedding and hash exactly as they were (recording
+  // the failure) — it never rolls back or blocks this otherwise-valid edit.
+  await ensureProductEmbeddingCurrent(id);
 
   revalidatePath("/", "layout");
   redirect("/admin/products");
