@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getCategories } from "@/lib/catalog/categories";
+import type { Category } from "@/lib/catalog/types";
 import { getPurchasableProductsByIds } from "@/lib/catalog/products";
 
 import { logAiEvent } from "./log";
@@ -153,8 +154,17 @@ export async function searchProductsFromNaturalLanguage(
 // has today. If that semantic-only search also finds nothing relevant,
 // the existing no_results handling in lib/ai/assistant.ts naturally takes
 // over — no new response type/status was needed for this.
+//
+// Meaning-aware fallback: only when resolveCategoryId() (exact match, then
+// head-word) found nothing, Gemini's categoryMatch slug is looked up in
+// the SAME real category list it was offered. A slug not in that list is
+// rejected (no category, turn continues) — the model's choice is never
+// trusted just because its schema was restricted. categoryMatch is
+// ignored entirely for "unchanged"/"clear".
 async function resolveCategoryTextUpdate(
   categoryText: ShoppingContextFieldUpdate<string>,
+  categoryMatch: string | null,
+  categories: Category[],
 ): Promise<ShoppingContextFieldUpdate<string>> {
   if (categoryText.kind !== "set") {
     return categoryText;
@@ -163,6 +173,15 @@ async function resolveCategoryTextUpdate(
   const resolvedId = await resolveCategoryId(categoryText.value);
   if (resolvedId) {
     return { kind: "set", value: resolvedId };
+  }
+
+  if (categoryMatch !== null) {
+    const chosen = categories.find((category) => category.slug === categoryMatch);
+    if (chosen) {
+      return { kind: "set", value: chosen.id };
+    }
+    // No customer text, slug, or model output in the log — just the event.
+    logAiEvent("error", "ai_category_choice_rejected", {});
   }
   return { kind: "clear" };
 }
@@ -178,8 +197,9 @@ async function resolveCategoryTextUpdate(
 // boundary already applies.
 async function buildShoppingContextTurnInput(
   update: Awaited<ReturnType<typeof extractShoppingContextUpdate>>,
+  categories: Category[],
 ): Promise<ShoppingContextTurnInput> {
-  const categoryId = await resolveCategoryTextUpdate(update.categoryText);
+  const categoryId = await resolveCategoryTextUpdate(update.categoryText, update.categoryMatch, categories);
 
   return shoppingContextTurnInputSchema.parse({
     contextAction: update.contextAction,
@@ -332,8 +352,23 @@ export async function searchProductsWithShoppingContext(
   userInput: string,
   previousContext: ShoppingContext | null,
 ): Promise<ShoppingContextSearchResult> {
-  const update = await extractShoppingContextUpdate(userInput, previousContext);
-  const turnInput = await buildShoppingContextTurnInput(update);
+  // Real categories for the meaning-aware fallback (categoryMatch). A load
+  // failure just means no categories to choose from — the same
+  // "category lookup failure must not sink the search" rule as
+  // resolveCategoryId().
+  let categories: Category[] = [];
+  try {
+    categories = await getCategories();
+  } catch {
+    logAiEvent("error", "ai_category_resolution_failed", {});
+  }
+
+  const update = await extractShoppingContextUpdate(
+    userInput,
+    previousContext,
+    categories.map(({ slug, name }) => ({ slug, name })),
+  );
+  const turnInput = await buildShoppingContextTurnInput(update, categories);
   const context = mergeShoppingContext(previousContext, turnInput);
 
   if (!context.semanticQuery) {
