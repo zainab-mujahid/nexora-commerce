@@ -2,18 +2,40 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { EmptyState } from "@/app/_components/empty-state";
+import { getProductEmbeddingStatuses } from "@/lib/ai/product-embedding-status";
 import { formatPrice } from "@/lib/catalog/format";
 import { getAdminProducts } from "@/lib/catalog/products";
 
 import { BackfillEmbeddingsButton } from "./backfill-embeddings-button";
+import { SearchIndexStatus, type SearchIndexDisplayStatus } from "./search-index-status";
 import { ToggleActiveButton } from "./toggle-active-button";
 
 export const metadata: Metadata = {
   title: "Products",
 };
 
+// Search-index statuses for exactly the listed products, in one bulk read
+// (no per-row queries, no vectors, no Gemini). Any failure only costs the
+// status column — every product then shows "Unavailable" — never the page.
+async function loadSearchIndexStatuses(
+  productIds: string[],
+): Promise<Map<string, SearchIndexDisplayStatus>> {
+  const display = new Map<string, SearchIndexDisplayStatus>();
+  try {
+    const result = await getProductEmbeddingStatuses(productIds);
+    if (!result.ok) return display;
+    for (const [id, entry] of result.statuses) {
+      display.set(id, entry.status ?? "unavailable");
+    }
+  } catch (error) {
+    console.error("AdminProductsPage: failed to load search index statuses", error);
+  }
+  return display;
+}
+
 export default async function AdminProductsPage() {
   const products = await getAdminProducts();
+  const searchIndex = await loadSearchIndexStatuses(products.map((product) => product.id));
 
   return (
     <div className="flex flex-col gap-6">
@@ -41,6 +63,7 @@ export default async function AdminProductsPage() {
                 <th className="py-2 pr-4 font-medium">Price</th>
                 <th className="py-2 pr-4 font-medium">Stock</th>
                 <th className="py-2 pr-4 font-medium">Status</th>
+                <th className="py-2 pr-4 font-medium">Search index</th>
                 <th className="py-2 pr-4 font-medium" />
               </tr>
             </thead>
@@ -66,6 +89,12 @@ export default async function AdminProductsPage() {
                     >
                       {product.is_active ? "Active" : "Inactive"}
                     </span>
+                  </td>
+                  <td className="py-2 pr-4">
+                    <SearchIndexStatus
+                      productId={product.id}
+                      status={searchIndex.get(product.id) ?? "unavailable"}
+                    />
                   </td>
                   <td className="py-2 pr-4">
                     <div className="flex gap-3">

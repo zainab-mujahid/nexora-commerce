@@ -187,6 +187,59 @@ export async function toggleProductActive(id: string, nextIsActive: boolean): Pr
   revalidatePath("/", "layout");
 }
 
+// ---- Per-product search-index repair ----
+// Makes ONE product's embedding match its current name/description/category
+// by delegating to ensureProductEmbeddingCurrent(), which owns the source
+// text, category lookup, hash, Gemini call, failure recording and guarded
+// write. Only the product id comes from the browser: whether a repair is
+// needed is re-decided on the server at execution time (a status shown
+// earlier may already be stale), so a product that is already current costs
+// no Gemini call and no write. Never throws a provider/database error to
+// the client — every outcome is one of the results below.
+export type RepairProductEmbeddingResult =
+  | { status: "repaired"; message: string }
+  | { status: "already_current"; message: string }
+  | { status: "failed"; message: string }
+  | { status: "superseded"; message: string }
+  | { status: "not_found"; message: string };
+
+export async function repairProductEmbedding(
+  productId: string,
+): Promise<RepairProductEmbeddingResult> {
+  await requireAdmin();
+
+  if (!adminResourceIdSchema.safeParse(productId).success) {
+    return { status: "not_found", message: PRODUCT_NOT_FOUND_MESSAGE };
+  }
+
+  const { status } = await ensureProductEmbeddingCurrent(productId);
+
+  switch (status) {
+    case "current":
+      return { status: "already_current", message: "Search index is already up to date." };
+    case "updated":
+      // Only the admin list shows index status; storefront search reads
+      // embeddings per request, so nothing else needs refreshing.
+      revalidatePath("/admin/products");
+      return { status: "repaired", message: "Search index updated." };
+    case "failed":
+      // A failed attempt records embedding_failed_at, which changes the
+      // status the admin list shows.
+      revalidatePath("/admin/products");
+      return {
+        status: "failed",
+        message: "Couldn't update the search index. Please try again later.",
+      };
+    case "superseded":
+      return {
+        status: "superseded",
+        message: "This product changed while its search index was being updated. Refresh and try again if it still needs it.",
+      };
+    case "not_found":
+      return { status: "not_found", message: PRODUCT_NOT_FOUND_MESSAGE };
+  }
+}
+
 // ---- Embedding backfill (Step 22 Phase 2) ----
 // Admin-triggered, one bounded batch per invocation — never runs on app
 // startup or as a side effect of ordinary browsing/admin traffic. Only ever
