@@ -48,8 +48,27 @@ export async function resolveCategoryId(categoryText: string | null): Promise<st
   const match = categories.find(
     (category) => category.name.toLowerCase() === normalized || category.slug === normalized || category.slug === slugified,
   );
+  if (match) return match.id;
 
-  return match?.id ?? null;
+  // Head-noun fallback (still deterministic, still only real categories):
+  // Gemini's categoryText wording varies between runs for the same request
+  // ("shoes" vs. "office shoes"), and an unresolved category silently drops
+  // the category filter for this turn and every follow-up. Only the LAST
+  // word is compared — the head noun in English noun phrases — so "black
+  // leather shoes" -> Shoes, while "laptop bags" (head "bags") and "shoes
+  // for office" (head "office") stay unresolved instead of guessing. A
+  // trailing "s" is ignored on both sides so "shoe" matches "Shoes". Only
+  // a single, unambiguous match is accepted.
+  const headWord = normalized.split(/[^a-z0-9]+/).filter(Boolean).at(-1);
+  if (!headWord) return null;
+  const stem = (word: string) => (word.endsWith("s") ? word.slice(0, -1) : word);
+  const headStem = stem(headWord);
+
+  const headMatches = categories.filter(
+    (category) => stem(category.name.toLowerCase()) === headStem || stem(category.slug) === headStem,
+  );
+
+  return headMatches.length === 1 ? headMatches[0].id : null;
 }
 
 export type NaturalLanguageProductSearchResult = {
@@ -265,6 +284,12 @@ export type ShoppingContextSearchResult = {
   // raw customer request actually refers to, even though the candidates
   // themselves were already correctly filtered.
   priceReference: PriceReference | null;
+  // True only when this turn asked for different products AND previously
+  // shown products were actually removed from `products` — passed to
+  // generateGroundedRecommendation() as a trusted fact so Gemini knows the
+  // candidates are already the unseen alternatives (same reason
+  // priceReference exists: the raw request "another one" alone is ambiguous).
+  alternativesExcluded: boolean;
 };
 
 // Controlled orchestration (Step 22 Phase 7E): current message + optional
@@ -312,7 +337,7 @@ export async function searchProductsWithShoppingContext(
   const context = mergeShoppingContext(previousContext, turnInput);
 
   if (!context.semanticQuery) {
-    return { context, products: [], priceReference: null };
+    return { context, products: [], priceReference: null, alternativesExcluded: false };
   }
 
   const priceReference = await resolvePriceReference(context.pricePreference, context.recommendedProductIds);
@@ -330,20 +355,35 @@ export async function searchProductsWithShoppingContext(
   // control" principle.
   const requestedCount = update.requestedCount ?? undefined;
 
+  // "Show me another one": when this turn asks for something different,
+  // products already shown in this conversation are removed after
+  // retrieval — the same bounded widen-filter-cap approach as the price
+  // comparison above, so match_products() ranking is kept and nothing is
+  // added. shownProductIds only ever removes candidates; it is never a
+  // price reference and never a source of products.
+  const excludedIds =
+    update.excludePreviouslyShown && context.shownProductIds.length > 0
+      ? new Set(context.shownProductIds)
+      : null;
+
   const products = await semanticProductSearch({
     query: context.semanticQuery,
     minPrice: context.minPrice ?? undefined,
     maxPrice: context.maxPrice ?? undefined,
     categoryId: context.categoryId ?? undefined,
-    matchCount: priceReference ? MAX_RETRIEVAL_MATCH_COUNT : requestedCount,
+    matchCount: priceReference || excludedIds ? MAX_RETRIEVAL_MATCH_COUNT : requestedCount,
   });
 
-  if (!priceReference) {
-    return { context, products, priceReference: null };
+  if (!priceReference && !excludedIds) {
+    return { context, products, priceReference: null, alternativesExcluded: false };
   }
 
-  const filtered = products.filter((product) => matchesPriceReference(Number(product.price), priceReference));
+  const filtered = products.filter(
+    (product) =>
+      (!priceReference || matchesPriceReference(Number(product.price), priceReference)) &&
+      (!excludedIds || !excludedIds.has(product.id)),
+  );
   const finalCap = requestedCount ?? DEFAULT_RETRIEVAL_MATCH_COUNT;
 
-  return { context, products: filtered.slice(0, finalCap), priceReference };
+  return { context, products: filtered.slice(0, finalCap), priceReference, alternativesExcluded: excludedIds !== null };
 }

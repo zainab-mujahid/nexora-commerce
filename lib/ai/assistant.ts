@@ -1,6 +1,6 @@
 import "server-only";
 
-import { shoppingContextSchema, type ShoppingContext } from "./context";
+import { appendShownProductIds, shoppingContextSchema, type ShoppingContext } from "./context";
 import { generateGroundedRecommendation, type GroundedRecommendation } from "./recommend";
 import { searchProductsWithShoppingContext } from "./search";
 
@@ -62,7 +62,7 @@ export async function getShoppingAssistantResponse(
     ? (shoppingContextSchema.safeParse(previousContext).data ?? null)
     : null;
 
-  const { context, products, priceReference } = await searchProductsWithShoppingContext(
+  const { context, products, priceReference, alternativesExcluded } = await searchProductsWithShoppingContext(
     userInput,
     safePreviousContext,
   );
@@ -83,6 +83,7 @@ export async function getShoppingAssistantResponse(
     userRequest: userInput,
     products,
     priceReference,
+    alternativesExcluded,
   });
 
   // The updated context's recommendedProductIds contains ONLY ids that
@@ -93,9 +94,15 @@ export async function getShoppingAssistantResponse(
   // matches lib/ai/context.ts's MAX_RECOMMENDED_PRODUCT_IDS), and
   // re-validated through shoppingContextSchema regardless as this
   // module's own defense-in-depth gate before returning.
+  // shownProductIds accumulates the same verified ids across this
+  // conversation's follow-ups (mergeShoppingContext() already reset it for
+  // a new/cleared search), so a later "show me another one" can skip them.
+  // On the no_results branch above it is left as merged, i.e. preserved.
+  const verifiedIds = recommendations.map((rec) => rec.product.id);
   const updatedContext = shoppingContextSchema.parse({
     ...context,
-    recommendedProductIds: recommendations.map((rec) => rec.product.id),
+    recommendedProductIds: verifiedIds,
+    shownProductIds: appendShownProductIds(context.shownProductIds, verifiedIds),
   });
 
   return { status: "ok", message, recommendations, context: updatedContext };

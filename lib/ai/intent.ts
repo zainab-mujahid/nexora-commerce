@@ -269,6 +269,11 @@ export type ShoppingIntentUpdate = {
   // ShoppingContext), so there is nothing to "unchanged"/"clear" across
   // turns — it is simply re-extracted fresh, or null, every time.
   requestedCount: number | null;
+  // Also per-turn, never durable: true when this turn asks for different
+  // products than the ones already recommended ("another one", "something
+  // else"). lib/ai/search.ts then removes ShoppingContext.shownProductIds
+  // from this turn's candidates.
+  excludePreviouslyShown: boolean;
 };
 
 // Gemini's native structured-output schema for the extraction above. Each
@@ -384,8 +389,13 @@ const GEMINI_CONTEXT_UPDATE_RESPONSE_SCHEMA = {
       description:
         "How many results the customer explicitly asked for THIS turn (e.g. 'top 3' -> 3, 'a couple' -> 2), or null if unspecified this turn. A per-turn modifier, not part of the unchanged/set/clear fields above — it is not something that persists or gets cleared across turns.",
     },
+    excludePreviouslyShown: {
+      type: Type.BOOLEAN,
+      description:
+        "true ONLY if the customer explicitly asks THIS turn for a different/other/new option INSTEAD OF the products already shown (e.g. 'show me another one', 'something else', 'a different option', 'any other options?'). false for refining or comparing the existing results — e.g. 'cheaper ones', 'anything cheaper?', 'more expensive ones', 'only black ones', 'under $70', 'similar products'. If a message asks for both (e.g. 'another cheaper one'), set this true AND set pricePreference. A per-turn modifier, not carried across turns.",
+    },
   },
-  required: ["contextAction", "semanticQuery", "categoryText", "minPrice", "maxPrice", "pricePreference", "requestedCount"],
+  required: ["contextAction", "semanticQuery", "categoryText", "minPrice", "maxPrice", "pricePreference", "requestedCount", "excludePreviouslyShown"],
 };
 
 // The privileged half of the prompt — same structural separation from
@@ -410,6 +420,8 @@ Also classify contextAction:
 If there is no previous shopping context provided, always use "new".
 
 Separately, extract requestedCount: how many results the customer explicitly asked for THIS turn (e.g. "top 3" -> 3, "a couple of options" -> 2), or null if unspecified this turn. This is not one of the unchanged/set/clear fields above — it is not carried forward from the previous context and does not need to be re-stated if it was already null.
+
+Also extract excludePreviouslyShown: true ONLY when the customer explicitly asks THIS turn for a different/other/new option instead of the products already shown (e.g. "show me another one", "something else", "a different option", "any other options?"). It is false when the customer is refining or comparing the existing results — a relative price ("cheaper ones", "anything cheaper?", "more expensive ones"), an attribute ("only black ones"), an explicit price ("under $70"), or similarity ("similar products") is NOT a request for different products by itself. If one message asks for both (e.g. "another cheaper one"), set excludePreviouslyShown true AND pricePreference to "cheaper" — they are independent. excludePreviouslyShown does not change semanticQuery/categoryText/minPrice/maxPrice — asking for "another one" keeps the same search — and it is not carried forward to later turns.
 
 Rules:
 - Never invent a price, category, preference, or count that the current message did not actually imply. If uncertain whether something changed, prefer "unchanged".
@@ -540,6 +552,7 @@ const shoppingIntentUpdateWireSchema = z
       .min(MIN_REQUESTED_COUNT)
       .max(MAX_REQUESTED_COUNT)
       .nullable(),
+    excludePreviouslyShown: z.boolean({ error: "excludePreviouslyShown must be a boolean." }),
   })
   .refine(
     (data) =>
@@ -559,6 +572,7 @@ const shoppingIntentUpdateWireSchema = z
       maxPrice: toFieldUpdate(data.maxPrice),
       pricePreference: toFieldUpdate(data.pricePreference),
       requestedCount: data.requestedCount,
+      excludePreviouslyShown: data.excludePreviouslyShown,
     }),
   );
 

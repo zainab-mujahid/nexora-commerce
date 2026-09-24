@@ -108,6 +108,7 @@ export function AiShoppingAssistant({
   const [inputValue, setInputValue] = useState("");
   const [isPending, startTransition] = useTransition();
   const messagesEndRef = useRef<HTMLLIElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Same-route navigations (/products?category=… soft navigations) re-render
   // this instance with new `children` but keep all of its state, so without
@@ -139,12 +140,23 @@ export function AiShoppingAssistant({
   const showRecommendations = recommendations.length > 0 && !viewAllProducts;
 
   // Auto-scrolls the message area to the newest turn, including the
-  // transient "Thinking…" bubble — scrollIntoView targets the nearest
+  // transient loading-dots bubble — scrollIntoView targets the nearest
   // scrollable ancestor, which is the overflow-y-auto message list below,
   // not the page itself.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [transcript, isPending]);
+
+  // Grows the prompt textarea to fit its wrapped text (CSS max-h-32 caps it,
+  // after which it scrolls), and shrinks it back once the prompt is cleared
+  // on send. Re-runs when the panel opens, since the textarea mounts then.
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const border = textarea.offsetHeight - textarea.clientHeight;
+    textarea.style.height = `${textarea.scrollHeight + border}px`;
+  }, [inputValue, isOpen]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -278,7 +290,7 @@ export function AiShoppingAssistant({
                   className={message.role === "user" ? "flex justify-end" : "flex justify-start"}
                 >
                   {message.role === "user" ? (
-                    <p className="max-w-[85%] rounded-md bg-foreground px-3 py-2 text-sm text-background">
+                    <p className="max-w-[85%] whitespace-pre-wrap rounded-md bg-foreground px-3 py-2 text-sm text-background">
                       {message.text}
                     </p>
                   ) : (
@@ -312,8 +324,28 @@ export function AiShoppingAssistant({
 
               {isPending && (
                 <li className="flex justify-start">
-                  <div className="max-w-[85%] rounded-md border border-black/10 px-3 py-2 text-sm text-foreground/60 dark:border-white/10">
-                    Thinking…
+                  <div
+                    role="status"
+                    className="max-w-[85%] rounded-md border border-black/10 px-3 py-2 text-sm text-foreground/60 dark:border-white/10"
+                  >
+                    <span className="sr-only">Assistant is replying</span>
+                    {/* Three dots bouncing in sequence (staggered delays);
+                        static for users who prefer reduced motion.
+                        animate-bounce moves an element by 25% of its own
+                        height, so each dot sits at the bottom of a taller
+                        wrapper that does the bouncing — a 20px wrapper
+                        gives a clearly visible ~5px hop instead of ~1.5px. */}
+                    <span aria-hidden="true" className="flex h-5 items-end gap-1.5">
+                      {["-0.4s", "-0.2s", "0s"].map((delay) => (
+                        <span
+                          key={delay}
+                          style={{ animationDelay: delay }}
+                          className="flex h-5 animate-bounce items-end motion-reduce:animate-none"
+                        >
+                          <span className="size-2 rounded-full bg-current" />
+                        </span>
+                      ))}
+                    </span>
                   </div>
                 </li>
               )}
@@ -324,24 +356,35 @@ export function AiShoppingAssistant({
 
           <form
             onSubmit={handleSubmit}
-            className="flex shrink-0 items-center gap-2 border-t border-black/10 px-4 py-3 dark:border-white/10"
+            className="flex shrink-0 items-end gap-2 border-t border-black/10 px-4 py-3 dark:border-white/10"
           >
-            <input
-              type="text"
+            {/* Wraps long prompts; grows with its content up to max-h-32,
+                then scrolls vertically. Enter sends through the form's own
+                submit (handleSubmit), Shift+Enter inserts a new line, and
+                Enter while an IME composition is active is left alone. */}
+            <textarea
+              ref={inputRef}
+              rows={1}
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
               maxLength={MAX_INPUT_LENGTH}
               disabled={isPending}
               placeholder="e.g. comfortable black office shoes under $100"
               aria-label="Shopping request"
-              className="flex-1 rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm outline-none focus:border-foreground/50 disabled:opacity-60 dark:border-white/20"
+              className="max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm leading-5 outline-none placeholder:truncate focus:border-foreground/50 disabled:opacity-60 dark:border-white/20"
             />
             <button
               type="submit"
               disabled={isPending || inputValue.trim().length === 0}
               className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 disabled:opacity-60"
             >
-              {isPending ? "Sending…" : "Send"}
+              {isPending ? "Replying…" : "Send"}
             </button>
           </form>
         </div>

@@ -22,6 +22,12 @@ const MAX_SEMANTIC_QUERY_LENGTH = 500;
 // return, so this is the natural bound, not an arbitrary "small number."
 const MAX_RECOMMENDED_PRODUCT_IDS = 5;
 
+// Bound for shownProductIds: five turns' worth of MAX_RECOMMENDED_PRODUCT_IDS.
+// Enough for repeated "show me another one" follow-ups to keep skipping
+// what was already shown, while keeping the browser-round-tripped context
+// small.
+export const MAX_SHOWN_PRODUCT_IDS = 25;
+
 // Bounded, structured multi-turn shopping context (Step 22 Phase 7B). This
 // is NOT a transcript and NOT free-form model output — every field is one
 // deterministic, previously-verified shopping fact (a semantic need, a
@@ -97,6 +103,23 @@ export const shoppingContextSchema = z
       // rejecting the whole context. Mirrors lib/ai/recommend.ts's own
       // duplicate-productId handling in generateGroundedRecommendation().
       .transform((ids) => Array.from(new Set(ids))),
+    // Every verified recommendation shown during this conversation's
+    // follow-ups (oldest first), used ONLY to exclude already-shown
+    // products when a turn asks for something different
+    // (ShoppingIntentUpdate.excludePreviouslyShown) — never as a price
+    // reference (that stays recommendedProductIds: the latest turn's
+    // picks), never to add or describe a product. Like recommendedProductIds
+    // it round-trips through the browser, so it is untrusted: UUID-only and
+    // bounded here, and the worst a tampered list can do is hide products
+    // from that same visitor's own results. Defaults to [] so a context
+    // saved before this field existed still validates.
+    shownProductIds: z
+      .array(z.uuid({ error: "shownProductIds entries must be valid UUIDs." }))
+      .max(MAX_SHOWN_PRODUCT_IDS, {
+        error: `shownProductIds must have at most ${MAX_SHOWN_PRODUCT_IDS} entries.`,
+      })
+      .transform((ids) => Array.from(new Set(ids)))
+      .default([]),
   })
   .refine(
     (data) => data.minPrice === null || data.maxPrice === null || data.minPrice <= data.maxPrice,
@@ -238,16 +261,14 @@ function resolveField<T>(
 //
 // Design decisions worth calling out explicitly:
 //
-// 1. Stale pricePreference vs. a fresh explicit number: if this turn sets
-//    an explicit new minPrice/maxPrice while leaving pricePreference itself
-//    "unchanged", the inherited pricePreference is cleared. A relative
-//    "cheaper" was relative to whatever price context existed before; a
-//    fresh absolute number replaces that reference point, so continuing to
-//    also apply a now-stale "cheaper" would silently compound two
-//    inconsistent signals. If a turn states a number AND a preference
-//    together in the same message (both "set"), both are current-turn
-//    signals and both are kept — this rule only fires when pricePreference
-//    itself carries no fresh signal this turn.
+// 1. pricePreference is current-turn-only: it is kept only when THIS turn
+//    "set"s it, and is null otherwise ("unchanged" does not inherit it).
+//    "Cheaper"/"more expensive" is a comparison against the previous
+//    turn's recommendations, not a lasting constraint — inheriting it made
+//    an unrelated follow-up ("only black ones") re-apply "cheaper" against
+//    the newer, lower picks. A follow-up that compares again ("even
+//    cheaper") sets it again. Absolute constraints (minPrice/maxPrice/
+//    categoryId/semanticQuery) are unaffected and still carry forward.
 //
 // 2. recommendedProductIds is retained from `previous` only when
 //    contextAction is "refine" — this is exactly the candidate reference
@@ -258,7 +279,9 @@ function resolveField<T>(
 //    never anchored to old results. The *next* real recommendation ids
 //    always overwrite this field once the recommendation pipeline
 //    actually runs, in lib/ai/assistant.ts — this function never invents
-//    or fetches product data itself.
+//    or fetches product data itself. shownProductIds follows the same
+//    retain-on-refine / reset-on-new-or-clear rule; lib/ai/assistant.ts
+//    appends each turn's verified picks to it (appendShownProductIds()).
 //
 // 3. The computed result is re-validated through shoppingContextSchema
 //    before being returned — this is the authoritative consistency check
@@ -282,21 +305,11 @@ export function mergeShoppingContext(
   const categoryId = resolveField(turn.contextAction, previous?.categoryId ?? null, turn.categoryId);
   const minPrice = resolveField(turn.contextAction, previous?.minPrice ?? null, turn.minPrice);
   const maxPrice = resolveField(turn.contextAction, previous?.maxPrice ?? null, turn.maxPrice);
-  let pricePreference = resolveField(
-    turn.contextAction,
-    previous?.pricePreference ?? null,
-    turn.pricePreference,
-  );
-
-  if (
-    turn.pricePreference.kind === "unchanged" &&
-    (turn.minPrice.kind === "set" || turn.maxPrice.kind === "set")
-  ) {
-    pricePreference = null;
-  }
+  const pricePreference = turn.pricePreference.kind === "set" ? turn.pricePreference.value : null;
 
   const recommendedProductIds =
     turn.contextAction === "refine" && previous ? previous.recommendedProductIds : [];
+  const shownProductIds = turn.contextAction === "refine" && previous ? previous.shownProductIds : [];
 
   return shoppingContextSchema.parse({
     semanticQuery,
@@ -305,5 +318,15 @@ export function mergeShoppingContext(
     maxPrice,
     pricePreference,
     recommendedProductIds,
+    shownProductIds,
   });
+}
+
+// Adds a turn's verified recommendation ids to the conversation's shown
+// list: oldest first, an id shown again moves to the newest position, and
+// only the most recent MAX_SHOWN_PRODUCT_IDS are kept.
+export function appendShownProductIds(previous: string[], latest: string[]): string[] {
+  const latestSet = new Set(latest);
+  const combined = [...previous.filter((id) => !latestSet.has(id)), ...latestSet];
+  return combined.slice(-MAX_SHOWN_PRODUCT_IDS);
 }
