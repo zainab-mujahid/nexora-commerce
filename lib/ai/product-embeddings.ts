@@ -4,10 +4,15 @@ import { createHash } from "node:crypto";
 
 import { createClient } from "@/lib/supabase/server";
 
-import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, generateEmbedding } from "./client";
+import {
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  generateEmbedding,
+  type GenerateEmbeddingOptions,
+} from "./client";
 import { logAiEvent } from "./log";
 
-// Deterministic and shared by create, edit, and backfill alike — if each
+// Deterministic and shared by create, edit, and repair alike — if each
 // call site built its own text differently, a product's embedding could
 // drift out of comparability with another's purely from formatting, not
 // any real semantic difference. Only semantic/searchable fields go in:
@@ -142,8 +147,14 @@ async function recordFailure(supabase: SupabaseClient, product: EmbeddingSourceR
 // slips into the single round trip between that re-read and the write, the
 // hash stored is still the hash of the text actually embedded — so the
 // product reads as out of date and gets repaired, never falsely current.
+//
+// `options` (optional) is passed through to generateEmbedding() unchanged —
+// used only by the admin bulk repair to bound and count Gemini requests. An
+// aborted request is an ordinary generation failure here (recorded, old
+// embedding and hash kept); nothing else in this function changes.
 export async function ensureProductEmbeddingCurrent(
   productId: string,
+  options: GenerateEmbeddingOptions = {},
 ): Promise<ProductEmbeddingResult> {
   try {
     const supabase = await createClient();
@@ -187,7 +198,7 @@ export async function ensureProductEmbeddingCurrent(
 
     let embedding: number[];
     try {
-      embedding = await generateEmbedding(text, "product_embedding_indexing");
+      embedding = await generateEmbedding(text, "product_embedding_indexing", options);
     } catch {
       logFailure("generation");
       await recordFailure(supabase, product);
@@ -247,23 +258,4 @@ export async function ensureProductEmbeddingCurrent(
     logFailure("unexpected");
     return { status: "failed" };
   }
-}
-
-export type ProductEmbeddingSource = {
-  id: string;
-  name: string;
-  description: string | null;
-  categoryId: string | null;
-};
-
-// Kept for the embedding backfill (lib/admin/products.ts), which still
-// passes a product it just read. It now goes through
-// ensureProductEmbeddingCurrent(), which reloads the product itself, so the
-// backfill gets the same category-lookup, hash, failure-recording and race
-// handling as create/edit. `success` means the embedding is now current.
-export async function generateAndStoreProductEmbedding(
-  product: ProductEmbeddingSource,
-): Promise<{ success: boolean }> {
-  const { status } = await ensureProductEmbeddingCurrent(product.id);
-  return { success: status === "updated" || status === "current" };
 }

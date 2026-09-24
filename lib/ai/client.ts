@@ -31,14 +31,30 @@ export const EMBEDDING_DIMENSIONS = 1536;
 // consumer of a resolved value can trust its shape without re-validating.
 // Callers that must never fail outright (product create/edit) are
 // responsible for catching this themselves — see
-// lib/ai/product-embeddings.ts's generateAndStoreProductEmbedding().
+// lib/ai/product-embeddings.ts's ensureProductEmbeddingCurrent().
 // `operation` (Step 22 Phase 8F): a small, server-controlled label
 // identifying which caller this embedding call is for, used only for
 // structured observability (see lib/ai/log.ts). Required so nothing here
 // is ever silently unobserved — every caller (lib/ai/retrieval.ts,
 // lib/ai/product-embeddings.ts) passes a fixed string literal; never a
 // value derived from user input.
-export async function generateEmbedding(text: string, operation: AiOperation): Promise<number[]> {
+//
+// `options` is optional and only used by the admin bulk search-index repair
+// (lib/admin/products.ts): `signal` is handed to the SDK as the request's
+// abortSignal (it cancels the real HTTP request; an abort is classified
+// "internal", so withAiRetry doesn't retry it), and `onProviderRequest` is
+// called once per actual provider request, retries included, so the caller
+// can count them. Without options the request is exactly as before.
+export type GenerateEmbeddingOptions = {
+  signal?: AbortSignal;
+  onProviderRequest?: () => void;
+};
+
+export async function generateEmbedding(
+  text: string,
+  operation: AiOperation,
+  options: GenerateEmbeddingOptions = {},
+): Promise<number[]> {
   const start = performance.now();
   // Step 22 Phase 8G (diagnostic follow-up): a closed-set stage, derived
   // ONLY from which control-flow branch below actually threw — never from
@@ -55,12 +71,16 @@ export async function generateEmbedding(text: string, operation: AiOperation): P
     // not a transient provider condition, and must never be retried (a
     // malformed embedding will be exactly as malformed on a second attempt).
     const response = await withAiRetry(
-      () =>
-        ai.models.embedContent({
+      () => {
+        options.onProviderRequest?.();
+        return ai.models.embedContent({
           model: EMBEDDING_MODEL,
           contents: text,
-          config: { outputDimensionality: EMBEDDING_DIMENSIONS },
-        }),
+          config: options.signal
+            ? { outputDimensionality: EMBEDDING_DIMENSIONS, abortSignal: options.signal }
+            : { outputDimensionality: EMBEDDING_DIMENSIONS },
+        });
+      },
       { operation },
     );
 

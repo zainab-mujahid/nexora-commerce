@@ -51,11 +51,12 @@ export function deriveProductEmbeddingStatus(
 // product has a category_id whose category name could not be read — the
 // status is then unknown rather than guessed (treating it as "no category"
 // could wrongly report a stale embedding as current, or the reverse).
-// `isActive` and `createdAt` ride along (they are already on the row) so
-// maintenance can order its work; neither plays any part in the status.
+// `isActive`, `createdAt` and `failedAt` (embedding_failed_at) ride along
+// (they are already on the row) so maintenance can order its work; the
+// status itself is derived only by deriveProductEmbeddingStatus().
 export type ProductEmbeddingStatusResult =
-  | { status: ProductEmbeddingStatus; isActive: boolean; createdAt: string }
-  | { status: null; unresolved: "category"; isActive: boolean; createdAt: string };
+  | { status: ProductEmbeddingStatus; isActive: boolean; createdAt: string; failedAt: string | null }
+  | { status: null; unresolved: "category"; isActive: boolean; createdAt: string; failedAt: string | null };
 
 type StatusRow = {
   id: string;
@@ -164,7 +165,7 @@ export async function getProductEmbeddingStatuses(
     // getAdminProducts in lib/catalog/products.ts).
     const category = row.category as unknown as { name: string } | null;
     if (row.category_id !== null && category === null) {
-      statuses.set(row.id, { status: null, unresolved: "category", isActive: row.is_active, createdAt: row.created_at });
+      statuses.set(row.id, { status: null, unresolved: "category", isActive: row.is_active, createdAt: row.created_at, failedAt: row.embedding_failed_at });
       continue;
     }
     statuses.set(row.id, {
@@ -178,6 +179,7 @@ export async function getProductEmbeddingStatuses(
       }),
       isActive: row.is_active,
       createdAt: row.created_at,
+      failedAt: row.embedding_failed_at,
     });
   }
   return { ok: true, statuses };

@@ -6,7 +6,6 @@ import { getProductEmbeddingStatuses } from "@/lib/ai/product-embedding-status";
 import { formatPrice } from "@/lib/catalog/format";
 import { getAdminProducts } from "@/lib/catalog/products";
 
-import { BackfillEmbeddingsButton } from "./backfill-embeddings-button";
 import { SearchIndexStatus, type SearchIndexDisplayStatus } from "./search-index-status";
 import { ToggleActiveButton } from "./toggle-active-button";
 
@@ -48,8 +47,6 @@ export default async function AdminProductsPage() {
           New product
         </Link>
       </div>
-
-      <BackfillEmbeddingsButton />
 
       {products.length === 0 ? (
         <EmptyState message="No products yet." />

@@ -27,7 +27,7 @@ const RETRYABLE_CATEGORIES: ReadonlySet<AiErrorCategory> = new Set([
 // INCLUDES the initial attempt (attempt 1 = original call, attempt 2 =
 // first retry, attempt 3 = final retry) — never more than 2 actual retries
 // for any single provider operation.
-const DEFAULT_MAX_ATTEMPTS = 3;
+export const DEFAULT_MAX_ATTEMPTS = 3;
 // Exponential backoff base and ceiling, in milliseconds. Doubling per
 // retry: 300ms before retry 1, 600ms before retry 2 (with
 // DEFAULT_MAX_ATTEMPTS = 3, there is no delay after retry 2 — that's the

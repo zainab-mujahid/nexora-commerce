@@ -22,7 +22,7 @@ export default async function AdminDashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <EntryCard
           href="/admin/products"
           title="Products"
@@ -37,6 +37,11 @@ export default async function AdminDashboardPage() {
           href="/admin/orders"
           title="Orders"
           description="Review orders and update their status."
+        />
+        <EntryCard
+          href="/admin/maintenance"
+          title="Maintenance"
+          description="Check and repair the product search index."
         />
       </div>
     </div>

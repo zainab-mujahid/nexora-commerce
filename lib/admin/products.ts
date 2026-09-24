@@ -9,10 +9,8 @@ import {
   summarizeProductEmbeddingStatuses,
   type ProductEmbeddingStatus,
 } from "@/lib/ai/product-embedding-status";
-import {
-  ensureProductEmbeddingCurrent,
-  generateAndStoreProductEmbedding,
-} from "@/lib/ai/product-embeddings";
+import { ensureProductEmbeddingCurrent } from "@/lib/ai/product-embeddings";
+import { DEFAULT_MAX_ATTEMPTS } from "@/lib/ai/retry";
 import { requireAdmin } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,13 +21,6 @@ import { adminResourceIdSchema, productSchema, type ProductFormState } from "./s
 const UNIQUE_VIOLATION = "23505";
 
 const PRODUCT_NOT_FOUND_MESSAGE = "This product no longer exists.";
-
-// Bounds a single backfillProductEmbeddings() call to a fixed batch instead
-// of an unbounded "embed the entire catalog in one request" loop — safe at
-// this project's current size, and still leaves a controlled, repeatable
-// path (click again) rather than a dangerous pattern once the catalog
-// grows. See backfillProductEmbeddings() below.
-const EMBEDDING_BACKFILL_BATCH_LIMIT = 50;
 
 function parseProductFields(formData: FormData) {
   return productSchema.safeParse({
@@ -256,11 +247,24 @@ export async function repairProductEmbedding(
 // one failure never undoes another product's repair. Safe to run
 // repeatedly: a product that is already current costs no Gemini call.
 const REPAIR_RUN_MAX_PRODUCTS = 10;
-// Checked before starting each product (an embedding request already in
-// flight is never cancelled), so a run can end up to one product's
-// duration past it.
+// Checked before starting each product, and also bounds the embedding
+// request in flight: each product's Gemini request gets an abort signal
+// that fires when the run's time is up, which cancels the real HTTP request
+// (the product then fails like any other failed generation — recorded, old
+// embedding and hash kept). Database reads/writes around it are not cut
+// off, so a run can still end a few round trips past this.
 const REPAIR_RUN_TIME_BUDGET_MS = 20_000;
 const REPAIR_RUN_MAX_CONSECUTIVE_FAILURES = 3;
+// At most this many Gemini embedding requests per run, retries included
+// (counted at the real request boundary). A product is only started while
+// its worst case — withAiRetry's maximum attempts — still fits, so a run
+// never exceeds this and never stops a product halfway.
+const REPAIR_RUN_MAX_PROVIDER_REQUESTS = 15;
+// A product whose repair failed within this window is moved behind every
+// other candidate (still attempted if the run gets that far): a product
+// that keeps failing must not take the front of every run and stop it
+// before other products get a chance.
+const REPAIR_RUN_FAILURE_COOLDOWN_MS = 30 * 60_000;
 
 // Customer-visible (active) products first; within each, no embedding at
 // all before a failed repair before an out-of-date one. Up-to-date products
@@ -272,7 +276,12 @@ const REPAIR_PRIORITY: Record<ProductEmbeddingStatus, number | null> = {
   up_to_date: null,
 };
 
-type RepairRunStopReason = "complete" | "batch_limit" | "time_budget" | "consecutive_failures";
+type RepairRunStopReason =
+  | "complete"
+  | "batch_limit"
+  | "time_budget"
+  | "consecutive_failures"
+  | "provider_budget";
 
 // completed:
 // - processed: products this run handed to ensureProductEmbeddingCurrent()
@@ -319,7 +328,13 @@ export async function repairProductSearchIndex(): Promise<RepairProductSearchInd
   }
 
   let skippedUnresolved = 0;
-  const candidates: { id: string; rank: number; createdAt: string }[] = [];
+  const now = Date.now();
+  const candidates: {
+    id: string;
+    rank: number;
+    createdAt: string;
+    recentFailure: string | null;
+  }[] = [];
   for (const [id, entry] of before.statuses) {
     if (entry.status === null) {
       skippedUnresolved++;
@@ -327,15 +342,28 @@ export async function repairProductSearchIndex(): Promise<RepairProductSearchInd
     }
     const priority = REPAIR_PRIORITY[entry.status];
     if (priority === null) continue;
-    candidates.push({ id, rank: (entry.isActive ? 0 : 3) + priority, createdAt: entry.createdAt });
+    const failedAtMs = entry.failedAt === null ? NaN : Date.parse(entry.failedAt);
+    candidates.push({
+      id,
+      rank: (entry.isActive ? 0 : 3) + priority,
+      createdAt: entry.createdAt,
+      recentFailure:
+        now - failedAtMs < REPAIR_RUN_FAILURE_COOLDOWN_MS ? entry.failedAt : null,
+    });
   }
-  // Priority bucket, then oldest first, then id — fully deterministic.
-  // created_at is an ISO timestamp string, so string order is time order.
+  // Products with no recent failure first, in priority bucket, then oldest
+  // first, then id; recently failed ones after all of them, in priority
+  // bucket, then oldest failure first, then id — fully deterministic.
+  // Timestamps are ISO strings, so string order is time order.
+  const byString = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
   candidates.sort(
     (a, b) =>
+      Number(a.recentFailure !== null) - Number(b.recentFailure !== null) ||
       a.rank - b.rank ||
-      (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0) ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      (a.recentFailure !== null && b.recentFailure !== null
+        ? byString(a.recentFailure, b.recentFailure)
+        : byString(a.createdAt, b.createdAt)) ||
+      byString(a.id, b.id),
   );
 
   const startedAt = performance.now();
@@ -351,6 +379,7 @@ export async function repairProductSearchIndex(): Promise<RepairProductSearchInd
   // database trouble is as sensible as on provider trouble. Any other
   // outcome breaks the streak.
   let consecutiveFailures = 0;
+  let providerRequests = 0;
   let stoppedReason: RepairRunStopReason = "complete";
 
   for (const candidate of candidates) {
@@ -362,13 +391,23 @@ export async function repairProductSearchIndex(): Promise<RepairProductSearchInd
       stoppedReason = "consecutive_failures";
       break;
     }
-    if (performance.now() - startedAt >= REPAIR_RUN_TIME_BUDGET_MS) {
+    const remainingMs = REPAIR_RUN_TIME_BUDGET_MS - (performance.now() - startedAt);
+    if (remainingMs <= 0) {
       stoppedReason = "time_budget";
+      break;
+    }
+    if (providerRequests + DEFAULT_MAX_ATTEMPTS > REPAIR_RUN_MAX_PROVIDER_REQUESTS) {
+      stoppedReason = "provider_budget";
       break;
     }
 
     processed++;
-    const { status } = await ensureProductEmbeddingCurrent(candidate.id);
+    const { status } = await ensureProductEmbeddingCurrent(candidate.id, {
+      signal: AbortSignal.timeout(Math.ceil(remainingMs)),
+      onProviderRequest: () => {
+        providerRequests++;
+      },
+    });
     if (status === "failed") {
       failed++;
       consecutiveFailures++;
@@ -440,76 +479,4 @@ function repairRunMessage(run: {
       : `${run.remaining} product(s) still need attention.`,
   );
   return sentences.join(" ");
-}
-
-// ---- Embedding backfill (Step 22 Phase 2) ----
-// Admin-triggered, one bounded batch per invocation — never runs on app
-// startup or as a side effect of ordinary browsing/admin traffic. Only ever
-// touches products.embedding IS NULL rows, in strictly sequential order
-// (awaiting each Gemini call before starting the next), so this can never
-// fire uncontrolled parallel API calls. A single product's failure is
-// caught inside generateAndStoreProductEmbedding() and only counted, never
-// aborts the rest of the batch.
-export type BackfillEmbeddingsState = { message: string } | undefined;
-
-// No form fields to read (the trigger button has none), so this
-// deliberately omits the `formData` parameter useActionState's action type
-// otherwise expects — TypeScript allows assigning a function with fewer
-// parameters to a function-typed slot that declares more.
-export async function backfillProductEmbeddings(
-  _prevState: BackfillEmbeddingsState,
-): Promise<BackfillEmbeddingsState> {
-  await requireAdmin();
-
-  const supabase = await createClient();
-
-  const { data: pending, error: pendingError } = await supabase
-    .from("products")
-    .select("id, name, description, category_id")
-    .is("embedding", null)
-    .order("created_at", { ascending: true })
-    .limit(EMBEDDING_BACKFILL_BATCH_LIMIT);
-
-  if (pendingError) {
-    console.error("backfillProductEmbeddings: failed to load pending products", pendingError);
-    return { message: "Failed to load products pending an embedding. Please try again." };
-  }
-
-  let succeeded = 0;
-  let failed = 0;
-
-  for (const product of pending) {
-    const result = await generateAndStoreProductEmbedding({
-      id: product.id,
-      name: product.name,
-      description: product.description,
-      categoryId: product.category_id,
-    });
-    if (result.success) {
-      succeeded++;
-    } else {
-      failed++;
-    }
-  }
-
-  const { count: remaining, error: remainingError } = await supabase
-    .from("products")
-    .select("id", { count: "exact", head: true })
-    .is("embedding", null);
-
-  if (remainingError) {
-    console.error("backfillProductEmbeddings: failed to count remaining products", remainingError);
-  }
-
-  if (succeeded > 0) {
-    revalidatePath("/", "layout");
-  }
-
-  if (pending.length === 0) {
-    return { message: "No products are missing an embedding." };
-  }
-
-  return {
-    message: `Processed ${pending.length} (${succeeded} succeeded, ${failed} failed). ${remaining ?? "unknown"} product(s) still need an embedding.`,
-  };
 }
