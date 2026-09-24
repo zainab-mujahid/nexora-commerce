@@ -4,6 +4,8 @@ import { logout } from "@/lib/auth/actions";
 import { getProfile, getUser, type Profile } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
 
+import { ProductSearchInput } from "./product-search-input";
+
 type AuthUser = Awaited<ReturnType<typeof getUser>>;
 
 type NavCategory = { name: string; slug: string };
@@ -118,13 +120,7 @@ function CategoriesMenu({ categories }: { categories: NavCategory[] }) {
 function SearchForm({ className }: { className: string }) {
   return (
     <form action="/products" className={className}>
-      <input
-        type="search"
-        name="q"
-        placeholder="Search products…"
-        aria-label="Search products"
-        className="w-full rounded-md border border-black/15 bg-transparent px-3 py-1.5 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
-      />
+      <ProductSearchInput className="w-full" />
     </form>
   );
 }

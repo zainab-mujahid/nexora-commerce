@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { AiShoppingAssistant } from "@/app/_components/ai-shopping-assistant";
 import { EmptyState } from "@/app/_components/empty-state";
 import { ProductGrid } from "@/app/_components/product-grid";
+import { ProductSearchInput } from "@/app/_components/product-search-input";
 import { getCategories } from "@/lib/catalog/categories";
 import { searchProducts, type ProductSort } from "@/lib/catalog/products";
 
@@ -26,8 +27,10 @@ type CurrentParams = {
 
 // Builds a /products href from the current filters plus overrides (e.g. a
 // different page or a toggled category), dropping any key whose final value
-// is empty — used so pagination links and category pills never silently
-// discard the search term or sort order already in effect.
+// is empty — used so pagination links never silently discard the search
+// term or sort order already in effect. Category pills and "All" pass
+// q: undefined on purpose: category navigation starts a fresh browse (no
+// leftover search), and since no page is carried it also resets to page 1.
 function buildHref(current: CurrentParams, overrides: Record<string, string | undefined>) {
   const merged = { ...current, ...overrides };
   const params = new URLSearchParams();
@@ -77,19 +80,16 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
         )}
       </div>
 
+      {/* key: category links navigate client-side and keep this form mounted,
+          and defaultValue only applies on mount — without re-keying, the
+          input would keep showing a search that is no longer in the URL. */}
       <form
+        key={`${q ?? ""}|${sort}|${category ?? ""}`}
         action="/products"
         className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
       >
         {category && <input type="hidden" name="category" value={category} />}
-        <input
-          type="search"
-          name="q"
-          defaultValue={q ?? ""}
-          placeholder="Search products…"
-          aria-label="Search products"
-          className="w-full max-w-sm rounded-md border border-black/15 bg-transparent px-3 py-1.5 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
-        />
+        <ProductSearchInput className="w-full max-w-sm" defaultValue={q ?? ""} />
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm">
             <span className="text-foreground/60">Sort by</span>
@@ -117,7 +117,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       {categories.length > 0 && (
         <div data-catalog-nav className="flex flex-wrap gap-2">
           <Link
-            href={buildHref(currentParams, { category: undefined })}
+            href={buildHref(currentParams, { category: undefined, q: undefined })}
             className={`rounded-full border px-3 py-1 text-xs font-medium ${
               !category
                 ? "border-foreground bg-foreground text-background"
@@ -131,6 +131,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
               key={cat.id}
               href={buildHref(currentParams, {
                 category: category === cat.slug ? undefined : cat.slug,
+                q: undefined,
               })}
               className={`rounded-full border px-3 py-1 text-xs font-medium ${
                 category === cat.slug

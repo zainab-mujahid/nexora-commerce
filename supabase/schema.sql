@@ -934,3 +934,236 @@ $$;
 -- shared 'anonymous' row.
 revoke all on function public.consume_ai_rate_limit() from public;
 grant execute on function public.consume_ai_rate_limit() to anon, authenticated;
+
+-- ============================================================================
+-- Catalog search, Phase 1 — search_catalog_products()
+--
+-- Database foundation for the storefront's hybrid product search. Separate
+-- from match_products() (the AI shopping assistant's RPC), which is left
+-- untouched: this one follows the CATALOG's visibility rules instead —
+-- is_active only, out-of-stock products included (the storefront lists them
+-- with a stock indicator), optional category filter.
+--
+-- Lexical evidence is ranked in ordinal tiers — no blended weights, no
+-- similarity thresholds calibrated against today's catalog:
+--   1 exact name (case-insensitive)
+--   2 name starts with the query
+--   3 query appears as whole word(s) in the name
+--   4 name contains the query        (the storefront's existing search)
+--   5 all query words appear in name + description + category name
+--     (English full-text search; this is where category words like
+--     "shoes" and descriptive words find evidence)
+--
+-- Semantic evidence needs a caller-supplied query embedding (generated
+-- server-side by the app) and a query of at least 2 characters:
+--   6 expansion — only when there IS lexical evidence: a product outside
+--     the lexical matches is added only if it is at least as similar to the
+--     query as the least similar lexical match (a per-query anchor, so no
+--     global constant). No anchor (no lexical match has an embedding) -> no
+--     expansion.
+--   7 candidate — only when there is NO lexical evidence: the top
+--     p_candidate_count products by similarity, returned for the
+--     application's relevance check. They are NOT results: callers must
+--     verify them before showing anything. They are returned all together
+--     (limit/offset/sort don't apply), ordered by similarity, since the app
+--     pages the verified subset itself.
+--
+-- Products without an embedding are still found through tiers 1-5; they
+-- are simply never semantic candidates/expansions.
+--
+-- Ordering: p_sort null/'relevance' -> tier, similarity, name, id; or the
+-- storefront's explicit sorts (newest / price_asc / price_desc / name_asc)
+-- over the same result set. Every ordering ends in id, so it is total and
+-- deterministic, and total_count/pagination come from the same query. A
+-- page past the end returns no rows (callers clamp the page first, as the
+-- storefront already does).
+--
+-- Security: SECURITY INVOKER (the default) — the caller's own RLS applies
+-- (products_select_active_or_admin), plus the explicit is_active filter so
+-- even an admin session only ever gets catalog-visible products. Returns
+-- ids/tier/count only; the app fetches display data through its existing
+-- queries. Inputs are bounded (query 1-200 characters, limit 1-48, offset
+-- 0-10000, candidates 1-20).
+--
+-- Scale: substring/prefix/exact name matching uses the trigram index,
+-- full-text matching uses the expression GIN index below (the WHERE
+-- clauses repeat those exact expressions so the planner can use them).
+-- The semantic pool (at most 100 nearest active products) is an exact scan
+-- until an approximate (HNSW) index is added deliberately later — not
+-- added here, because the same index would also change match_products()'
+-- results for the assistant.
+-- ============================================================================
+create extension if not exists pg_trgm with schema extensions;
+
+create index if not exists products_name_trgm_idx
+  on public.products using gin (name extensions.gin_trgm_ops);
+
+create index if not exists products_search_text_idx
+  on public.products using gin (to_tsvector('english', name || ' ' || coalesce(description, '')));
+
+create or replace function public.search_catalog_products(
+  p_query text,
+  p_query_embedding extensions.vector(1536) default null,
+  p_category_id uuid default null,
+  p_sort text default null,
+  p_limit integer default 12,
+  p_offset integer default 0,
+  p_candidate_count integer default 8
+)
+returns table (product_id uuid, match_tier smallint, total_count bigint)
+language plpgsql
+stable
+set search_path = public, extensions
+as $$
+declare
+  c_max_query_length constant integer := 200;
+  c_max_limit        constant integer := 48;
+  c_max_offset       constant integer := 10000;
+  c_semantic_pool    constant integer := 100;
+  c_max_candidates   constant integer := 20;
+  v_query      text := regexp_replace(btrim(coalesce(p_query, '')), '\s+', ' ', 'g');
+  v_sort       text := coalesce(p_sort, 'relevance');
+  v_limit      integer := least(greatest(coalesce(p_limit, 12), 1), c_max_limit);
+  v_offset     integer := least(greatest(coalesce(p_offset, 0), 0), c_max_offset);
+  v_candidates integer := least(greatest(coalesce(p_candidate_count, 8), 1), c_max_candidates);
+  v_like       text;
+  v_regex      text;
+  v_all        tsquery;
+  v_any        tsquery;
+  v_semantic   boolean;
+begin
+  if char_length(v_query) = 0 then
+    raise exception 'QUERY_REQUIRED';
+  end if;
+  if char_length(v_query) > c_max_query_length then
+    raise exception 'QUERY_TOO_LONG';
+  end if;
+  if v_sort not in ('relevance', 'newest', 'price_asc', 'price_desc', 'name_asc') then
+    raise exception 'INVALID_SORT';
+  end if;
+
+  -- The query as a LIKE literal (\, % and _ escaped) and as a regex
+  -- literal (every non-alphanumeric character escaped), so customer text is
+  -- never interpreted as a pattern.
+  v_like  := replace(replace(replace(lower(v_query), '\', '\\'), '%', '\%'), '_', '\_');
+  v_regex := regexp_replace(lower(v_query), '([^[:alnum:][:space:]])', '\\\1', 'g');
+
+  -- All-words query for tier 5, and an any-word version used only to reach
+  -- candidate rows through the index. A stop-word-only query ("a", "the")
+  -- has no lexemes -> no full-text matching at all.
+  v_all := plainto_tsquery('english', v_query);
+  if numnode(v_all) > 0 then
+    v_any := replace(v_all::text, ' & ', ' | ')::tsquery;
+  else
+    v_all := null;
+  end if;
+
+  v_semantic := p_query_embedding is not null and char_length(v_query) >= 2;
+
+  return query
+  with lexical as (
+    select
+      p.id,
+      case
+        when lower(p.name) = lower(v_query)            then 1
+        when p.name ilike v_like || '%'                then 2
+        when lower(p.name) ~ ('\m' || v_regex || '\M') then 3
+        when p.name ilike '%' || v_like || '%'         then 4
+        else 5
+      end::smallint as tier,
+      case
+        when v_semantic and p.embedding is not null
+          then 1 - (p.embedding <=> p_query_embedding)
+      end as sim
+    from public.products p
+    left join public.categories c on c.id = p.category_id
+    where p.is_active
+      and (p_category_id is null or p.category_id = p_category_id)
+      and (
+        p.name ilike '%' || v_like || '%'
+        or (
+          v_all is not null
+          and (
+            to_tsvector('english', p.name || ' ' || coalesce(p.description, '')) @@ v_any
+            -- category evidence through the (small) categories table, so the
+            -- products side can still use its category_id index
+            or p.category_id in (
+              select c2.id
+              from public.categories c2
+              where to_tsvector('english', c2.name) @@ v_any
+            )
+          )
+          and (to_tsvector('english', p.name || ' ' || coalesce(p.description, ''))
+               || to_tsvector('english', coalesce(c.name, ''))) @@ v_all
+        )
+      )
+  ),
+  pool as (
+    select p.id, 1 - (p.embedding <=> p_query_embedding) as sim
+    from public.products p
+    where v_semantic
+      and p.is_active
+      and p.embedding is not null
+      and (p_category_id is null or p.category_id = p_category_id)
+    order by p.embedding <=> p_query_embedding, p.id
+    limit c_semantic_pool
+  ),
+  anchor as (
+    select min(l.sim) as floor_sim from lexical l
+  ),
+  expansion as (
+    select pl.id, 6::smallint as tier, pl.sim
+    from pool pl
+    cross join anchor a
+    where a.floor_sim is not null
+      and pl.sim >= a.floor_sim
+      and not exists (select 1 from lexical l where l.id = pl.id)
+  ),
+  candidates as (
+    select pl.id, 7::smallint as tier, pl.sim
+    from pool pl
+    where not exists (select 1 from lexical)
+    order by pl.sim desc, pl.id
+    limit v_candidates
+  ),
+  results as (
+    select l.id, l.tier, l.sim from lexical l
+    union all
+    select e.id, e.tier, e.sim from expansion e
+    union all
+    select k.id, k.tier, k.sim from candidates k
+  ),
+  ranked as (
+    select
+      r.id,
+      r.tier,
+      count(*) over () as total,
+      row_number() over (
+        order by
+          case when r.tier = 7 then r.sim end desc nulls last,
+          case when v_sort = 'relevance' then r.tier end asc,
+          case when v_sort = 'relevance' then r.sim end desc nulls last,
+          case when v_sort = 'newest' then p.created_at end desc,
+          case when v_sort = 'price_asc' then p.price end asc,
+          case when v_sort = 'price_desc' then p.price end desc,
+          case when v_sort in ('relevance', 'name_asc') then p.name end asc,
+          r.id asc
+      ) as rn
+    from results r
+    join public.products p on p.id = r.id
+  )
+  select rk.id, rk.tier, rk.total
+  from ranked rk
+  where rk.tier = 7
+     or (rk.rn > v_offset and rk.rn <= v_offset + v_limit)
+  order by rk.rn;
+end;
+$$;
+
+-- Catalog data is public (guests browse and search too), so anon and
+-- authenticated may execute; PUBLIC's default EXECUTE is revoked first.
+-- SECURITY INVOKER + RLS + the explicit is_active filter decide which rows
+-- any caller can reach.
+revoke all on function public.search_catalog_products(text, extensions.vector, uuid, text, integer, integer, integer) from public;
+revoke all on function public.search_catalog_products(text, extensions.vector, uuid, text, integer, integer, integer) from anon, authenticated;
+grant execute on function public.search_catalog_products(text, extensions.vector, uuid, text, integer, integer, integer) to anon, authenticated;

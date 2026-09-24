@@ -4,6 +4,8 @@ import { getS3PublicUrl } from "@/lib/s3/url";
 import { createClient } from "@/lib/supabase/server";
 
 import { getCategoryBySlug } from "./categories";
+import { getSearchQueryEmbedding } from "./search-embedding";
+import { checkCatalogSearchRelevance, type RelevanceCandidate } from "./search-relevance";
 import type { Category, ProductDetail, ProductImage, ProductListItem } from "./types";
 
 const LIST_SELECT =
@@ -177,10 +179,257 @@ export type SearchProductsResult = {
 
 const PRODUCTS_PAGE_SIZE = 12;
 
+// ---- Hybrid catalog search (search_catalog_products(), Phase 2) ----
+
+// How many no-lexical-evidence candidates the RPC returns for the grounded
+// relevance check (lib/catalog/search-relevance.ts).
+const RELEVANCE_CANDIDATE_COUNT = 8;
+// search_catalog_products() rejects longer queries; those use the name
+// search below instead.
+const MAX_HYBRID_QUERY_LENGTH = 200;
+
+type CatalogSearchRow = { product_id: string; match_tier: number; total_count: number };
+type SearchListItem = ProductListItem & { created_at: string };
+
+function emptySearchPage(pageSize: number): SearchProductsResult {
+  return { products: [], totalCount: 0, page: 1, pageSize, totalPages: 1 };
+}
+
+function withoutCreatedAt(product: SearchListItem): ProductListItem {
+  return {
+    id: product.id,
+    name: product.name,
+    slug: product.slug,
+    price: product.price,
+    stock: product.stock,
+    images: product.images,
+  };
+}
+
+// Loads display rows (same LIST_SELECT + is_active as every storefront list)
+// for a bounded set of ids and returns them in the given order. Ids that
+// stopped being active in between simply drop out.
+async function getListItemsInOrder(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  ids: string[],
+): Promise<SearchListItem[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from("products")
+    .select(`${LIST_SELECT}, created_at`)
+    .in("id", ids)
+    .eq("is_active", true)
+    .order("sort_order", { referencedTable: "images" })
+    .order("created_at", { referencedTable: "images" });
+
+  if (error) {
+    console.error("searchProducts: failed to load matched products", error);
+    throw new Error("Failed to load products");
+  }
+
+  const byId = new Map(data.map((product) => [product.id, product]));
+  return ids.flatMap((id) => {
+    const product = byId.get(id);
+    return product ? [{ ...product, images: attachImageUrls(product.images) }] : [];
+  });
+}
+
+// The orderings search_catalog_products() applies, for the few (at most
+// RELEVANCE_CANDIDATE_COUNT) relevance-approved products, which are paged
+// here instead of in SQL. No sort = relevance = the approved order (most
+// similar first). id is the final tie-breaker, as in the RPC.
+function sortApproved(products: SearchListItem[], sort: ProductSort | undefined): SearchListItem[] {
+  const byId = (a: SearchListItem, b: SearchListItem) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const sorted = [...products];
+  switch (sort) {
+    case "newest":
+      return sorted.sort((a, b) => b.created_at.localeCompare(a.created_at) || byId(a, b));
+    case "price_asc":
+      return sorted.sort((a, b) => Number(a.price) - Number(b.price) || byId(a, b));
+    case "price_desc":
+      return sorted.sort((a, b) => Number(b.price) - Number(a.price) || byId(a, b));
+    case "name_asc":
+      return sorted.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) || byId(a, b));
+    default:
+      return sorted;
+  }
+}
+
+// Tier-7 rows are only the nearest products by embedding similarity for a
+// query with no lexical evidence — never results by themselves. Only ids the
+// grounded relevance check approves (a subset of these candidates) are
+// shown; anything else (none approved, check unavailable) is the normal
+// "no products match" result.
+async function resolveRelevanceCandidates(options: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  term: string;
+  candidateIds: string[];
+  sort: ProductSort | undefined;
+  requestedPage: number;
+  pageSize: number;
+}): Promise<SearchProductsResult> {
+  const { supabase, term, candidateIds, sort, requestedPage, pageSize } = options;
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, name, description, category:categories(name)")
+    .in("id", candidateIds)
+    .eq("is_active", true);
+
+  if (error) {
+    console.error("searchProducts: failed to load search candidates", error);
+    return emptySearchPage(pageSize);
+  }
+
+  const byId = new Map(data.map((row) => [row.id, row]));
+  const candidates: RelevanceCandidate[] = candidateIds.flatMap((id) => {
+    const row = byId.get(id);
+    if (!row) return [];
+    // to-one embed: a plain object or null at runtime (see getProductBySlug).
+    const category = row.category as unknown as { name: string } | null;
+    return [{ id: row.id, name: row.name, category: category?.name ?? null, description: row.description }];
+  });
+
+  const check = await checkCatalogSearchRelevance(term, candidates);
+  if (check.status !== "ok" || check.relevantIds.length === 0) {
+    return emptySearchPage(pageSize);
+  }
+
+  // relevantIds is already a verified subset of the candidates.
+  const approved = sortApproved(await getListItemsInOrder(supabase, check.relevantIds), sort);
+  if (approved.length === 0) return emptySearchPage(pageSize);
+  const totalPages = Math.max(1, Math.ceil(approved.length / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+
+  return {
+    products: approved.slice((page - 1) * pageSize, page * pageSize).map(withoutCreatedAt),
+    totalCount: approved.length,
+    page,
+    pageSize,
+    totalPages,
+  };
+}
+
+// Tiers 1-3 of search_catalog_products() — exact name, name prefix, whole
+// word(s) in the name. When the query already names a product this way, the
+// name match is the answer: no query embedding is generated (so no Gemini
+// latency/cost and no embedding budget used), and consequently no tier-6
+// semantic expansion. Weaker lexical evidence (tier 4 substring, tier 5
+// description/category words) still gets the embedding and expansion.
+const STRONG_NAME_MATCH_MAX_TIER = 3;
+
+// The q path: search_catalog_products() does candidate selection, ranking,
+// counting and paging in PostgreSQL; this loads only one page of display
+// rows (or the <= RELEVANCE_CANDIDATE_COUNT candidates). Returns null if the
+// RPC itself fails, so searchProducts() can fall back to its name search.
+async function searchProductsHybrid(options: {
+  term: string;
+  categoryId: string | null;
+  sort: ProductSort | undefined;
+  requestedPage: number;
+  pageSize: number;
+}): Promise<SearchProductsResult | null> {
+  const { term, categoryId, sort, requestedPage, pageSize } = options;
+  const supabase = await createClient();
+
+  const rpc = async (params: {
+    embedding: number[] | null;
+    sort: ProductSort | null;
+    limit: number;
+    offset: number;
+  }): Promise<CatalogSearchRow[] | null> => {
+    const { data, error } = await supabase.rpc("search_catalog_products", {
+      p_query: term,
+      p_query_embedding: params.embedding,
+      p_category_id: categoryId,
+      p_sort: params.sort,
+      p_limit: params.limit,
+      p_offset: params.offset,
+      p_candidate_count: RELEVANCE_CANDIDATE_COUNT,
+    });
+    if (error) {
+      console.error("searchProducts: search_catalog_products failed, falling back to name search", error);
+      return null;
+    }
+    return (data ?? []) as CatalogSearchRow[];
+  };
+
+  // Lexical-only probe (no embedding, so no vector work): in relevance order
+  // the first row carries the query's best lexical tier. It decides, before
+  // any Gemini call, whether a query embedding is needed at all. The
+  // decision depends only on lexical evidence, so it is the same whether or
+  // not an embedding happens to be cached — result sets stay stable.
+  const probe = await rpc({ embedding: null, sort: null, limit: 1, offset: 0 });
+  if (probe === null) return null;
+  const hasLexicalEvidence = probe.length > 0;
+  const strongNameMatch = hasLexicalEvidence && probe[0].match_tier <= STRONG_NAME_MATCH_MAX_TIER;
+
+  // null (strong name match, too short, budget exhausted or embedding
+  // failure) -> the page request runs lexical-only.
+  const embedding = strongNameMatch ? null : await getSearchQueryEmbedding(term);
+  if (!hasLexicalEvidence && embedding === null) {
+    // No lexical evidence and no embedding -> no candidates either.
+    return emptySearchPage(pageSize);
+  }
+
+  const callRpc = (offset: number) =>
+    rpc({ embedding, sort: sort ?? null, limit: pageSize, offset });
+
+  let page = requestedPage;
+  let rows = await callRpc((page - 1) * pageSize);
+  if (rows === null) return null;
+
+  // A page past the end returns no rows; clamp to the last page the same way
+  // the name search does, using the count from the first page.
+  if (rows.length === 0 && page > 1) {
+    const firstPage = await callRpc(0);
+    if (firstPage === null) return null;
+    if (firstPage.length === 0 || firstPage[0].match_tier === 7) {
+      rows = firstPage;
+      page = 1;
+    } else {
+      page = Math.min(page, Math.max(1, Math.ceil(Number(firstPage[0].total_count) / pageSize)));
+      rows = page === 1 ? firstPage : await callRpc((page - 1) * pageSize);
+      if (rows === null) return null;
+    }
+  }
+
+  if (rows.length === 0) return emptySearchPage(pageSize);
+
+  if (rows[0].match_tier === 7) {
+    return resolveRelevanceCandidates({
+      supabase,
+      term,
+      candidateIds: rows.filter((row) => row.match_tier === 7).map((row) => row.product_id),
+      sort,
+      requestedPage,
+      pageSize,
+    });
+  }
+
+  const totalCount = Number(rows[0].total_count);
+  const products = await getListItemsInOrder(
+    supabase,
+    rows.map((row) => row.product_id),
+  );
+  return {
+    products: products.map(withoutCreatedAt),
+    totalCount,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+  };
+}
+
 // Powers /products (Step 19): search, category filter, sort, and pagination,
 // all applied server-side against the same is_active-only query the rest of
 // the customer storefront uses — a search term or category filter can never
 // surface an inactive product.
+//
+// With a search term, the hybrid catalog search above is used (lexical tiers
+// + semantic expansion, and relevance-checked semantic results when nothing
+// matches lexically); if its RPC fails, the name search below still runs.
+// No sort means relevance order for a search; /products currently always
+// passes one (its default is "newest").
 export async function searchProducts(options: {
   q?: string;
   categorySlug?: string;
@@ -203,6 +452,18 @@ export async function searchProducts(options: {
   }
 
   const term = options.q?.trim();
+
+  if (term && term.length <= MAX_HYBRID_QUERY_LENGTH) {
+    const hybrid = await searchProductsHybrid({
+      term,
+      categoryId,
+      sort: options.sort,
+      requestedPage,
+      pageSize,
+    });
+    if (hybrid) return hybrid;
+  }
+
   const supabase = await createClient();
 
   // Counted separately, before the row-returning query below: PostgREST

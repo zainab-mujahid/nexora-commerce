@@ -25,7 +25,11 @@ export type AiOperation =
   | "intent_generation"
   | "query_embedding"
   | "recommendation_generation"
-  | "product_embedding_indexing";
+  | "product_embedding_indexing"
+  // Storefront catalog search (lib/catalog/search-*.ts), logged separately
+  // from the shopping assistant's own calls.
+  | "catalog_search_embedding"
+  | "catalog_relevance_check";
 
 export type AiLogFields = Record<string, string | number | boolean | null | undefined>;
 
