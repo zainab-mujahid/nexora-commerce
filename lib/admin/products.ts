@@ -5,6 +5,11 @@ import { redirect } from "next/navigation";
 import * as z from "zod";
 
 import {
+  getProductEmbeddingStatuses,
+  summarizeProductEmbeddingStatuses,
+  type ProductEmbeddingStatus,
+} from "@/lib/ai/product-embedding-status";
+import {
   ensureProductEmbeddingCurrent,
   generateAndStoreProductEmbedding,
 } from "@/lib/ai/product-embeddings";
@@ -238,6 +243,203 @@ export async function repairProductEmbedding(
     case "not_found":
       return { status: "not_found", message: PRODUCT_NOT_FOUND_MESSAGE };
   }
+}
+
+// ---- Bulk search-index repair (maintenance) ----
+// One bounded, admin-triggered run over the products whose search index
+// needs attention (missing, out of date, repair failed), chosen on the
+// server from the canonical statuses at the start of the run — nothing
+// about which products, how many, or their state comes from the browser.
+// Each product goes through ensureProductEmbeddingCurrent() — the same
+// source text, hash, category handling, failure recording and guarded
+// write as a single repair — one at a time, and each commits on its own, so
+// one failure never undoes another product's repair. Safe to run
+// repeatedly: a product that is already current costs no Gemini call.
+const REPAIR_RUN_MAX_PRODUCTS = 10;
+// Checked before starting each product (an embedding request already in
+// flight is never cancelled), so a run can end up to one product's
+// duration past it.
+const REPAIR_RUN_TIME_BUDGET_MS = 20_000;
+const REPAIR_RUN_MAX_CONSECUTIVE_FAILURES = 3;
+
+// Customer-visible (active) products first; within each, no embedding at
+// all before a failed repair before an out-of-date one. Up-to-date products
+// are never candidates.
+const REPAIR_PRIORITY: Record<ProductEmbeddingStatus, number | null> = {
+  missing: 0,
+  repair_failed: 1,
+  out_of_date: 2,
+  up_to_date: null,
+};
+
+type RepairRunStopReason = "complete" | "batch_limit" | "time_budget" | "consecutive_failures";
+
+// completed:
+// - processed: products this run handed to ensureProductEmbeddingCurrent()
+//   (at most REPAIR_RUN_MAX_PRODUCTS) = repaired + alreadyCurrent + failed
+//   + superseded + notFound.
+// - alreadyCurrent / notFound: had become current, or been deleted, by the
+//   time they were reached (a concurrent save or repair) — no Gemini call.
+// - superseded: the product or its category changed while its embedding
+//   was being generated, so nothing was written for it.
+// - skippedUnresolved: status couldn't be determined; never processed.
+// - remaining: products still needing attention after the run, re-read
+//   from the canonical statuses (null if that re-read failed).
+// - stoppedReason: complete (no candidates left), or why it stopped early.
+//   Products left unprocessed are not failures.
+// unavailable: the statuses couldn't be read, so nothing was processed.
+export type RepairProductSearchIndexResult =
+  | {
+      status: "completed";
+      processed: number;
+      repaired: number;
+      alreadyCurrent: number;
+      failed: number;
+      superseded: number;
+      notFound: number;
+      skippedUnresolved: number;
+      remaining: number | null;
+      stoppedReason: RepairRunStopReason;
+      message: string;
+    }
+  | { status: "unavailable"; message: string };
+
+// Uses ensureProductEmbeddingCurrent() directly rather than
+// repairProductEmbedding(): this action has already checked admin access
+// once, and revalidates once at the end, instead of per product.
+export async function repairProductSearchIndex(): Promise<RepairProductSearchIndexResult> {
+  await requireAdmin();
+
+  const before = await getProductEmbeddingStatuses();
+  if (!before.ok) {
+    return {
+      status: "unavailable",
+      message: "Couldn't read the search index status. Please try again.",
+    };
+  }
+
+  let skippedUnresolved = 0;
+  const candidates: { id: string; rank: number; createdAt: string }[] = [];
+  for (const [id, entry] of before.statuses) {
+    if (entry.status === null) {
+      skippedUnresolved++;
+      continue;
+    }
+    const priority = REPAIR_PRIORITY[entry.status];
+    if (priority === null) continue;
+    candidates.push({ id, rank: (entry.isActive ? 0 : 3) + priority, createdAt: entry.createdAt });
+  }
+  // Priority bucket, then oldest first, then id — fully deterministic.
+  // created_at is an ISO timestamp string, so string order is time order.
+  candidates.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+
+  const startedAt = performance.now();
+  let processed = 0;
+  let repaired = 0;
+  let alreadyCurrent = 0;
+  let failed = 0;
+  let superseded = 0;
+  let notFound = 0;
+  // `failed` from ensure covers the embedding provider AND the database
+  // reads/writes around it (including the category lookup) — it doesn't
+  // say which. Every `failed` counts here: stopping early on repeated
+  // database trouble is as sensible as on provider trouble. Any other
+  // outcome breaks the streak.
+  let consecutiveFailures = 0;
+  let stoppedReason: RepairRunStopReason = "complete";
+
+  for (const candidate of candidates) {
+    if (processed >= REPAIR_RUN_MAX_PRODUCTS) {
+      stoppedReason = "batch_limit";
+      break;
+    }
+    if (consecutiveFailures >= REPAIR_RUN_MAX_CONSECUTIVE_FAILURES) {
+      stoppedReason = "consecutive_failures";
+      break;
+    }
+    if (performance.now() - startedAt >= REPAIR_RUN_TIME_BUDGET_MS) {
+      stoppedReason = "time_budget";
+      break;
+    }
+
+    processed++;
+    const { status } = await ensureProductEmbeddingCurrent(candidate.id);
+    if (status === "failed") {
+      failed++;
+      consecutiveFailures++;
+      continue;
+    }
+    consecutiveFailures = 0;
+    if (status === "updated") repaired++;
+    else if (status === "current") alreadyCurrent++;
+    else if (status === "superseded") superseded++;
+    else notFound++;
+  }
+
+  // Re-derived after the run, so concurrent saves, repairs and category
+  // changes are reflected — counting down from the candidates would not be.
+  const after = await getProductEmbeddingStatuses();
+  const remaining = after.ok
+    ? summarizeProductEmbeddingStatuses(after.statuses).needsAttention
+    : null;
+
+  // Repairs and recorded failures (embedding_failed_at) both change the
+  // search-index status the admin product list shows; storefront search
+  // reads embeddings per request and needs no revalidation.
+  if (repaired > 0 || failed > 0) revalidatePath("/admin/products");
+
+  return {
+    status: "completed",
+    processed,
+    repaired,
+    alreadyCurrent,
+    failed,
+    superseded,
+    notFound,
+    skippedUnresolved,
+    remaining,
+    stoppedReason,
+    message: repairRunMessage({ processed, repaired, failed, superseded, skippedUnresolved, remaining, stoppedReason }),
+  };
+}
+
+function repairRunMessage(run: {
+  processed: number;
+  repaired: number;
+  failed: number;
+  superseded: number;
+  skippedUnresolved: number;
+  remaining: number | null;
+  stoppedReason: RepairRunStopReason;
+}): string {
+  const sentences: string[] = [];
+  if (run.processed === 0) {
+    sentences.push("No products needed repair.");
+  } else {
+    const parts = [`${run.repaired} repaired`];
+    if (run.failed > 0) parts.push(`${run.failed} failed`);
+    if (run.superseded > 0) parts.push(`${run.superseded} changed during the run`);
+    sentences.push(`Search index repair: ${parts.join(", ")}.`);
+  }
+  if (run.stoppedReason === "consecutive_failures") {
+    sentences.push("Stopped after repeated failures. Please try again later.");
+  } else if (run.stoppedReason !== "complete") {
+    sentences.push("Run again to continue.");
+  }
+  if (run.skippedUnresolved > 0) {
+    sentences.push(`${run.skippedUnresolved} product(s) couldn't be checked.`);
+  }
+  sentences.push(
+    run.remaining === null
+      ? "Couldn't re-check the remaining count."
+      : `${run.remaining} product(s) still need attention.`,
+  );
+  return sentences.join(" ");
 }
 
 // ---- Embedding backfill (Step 22 Phase 2) ----

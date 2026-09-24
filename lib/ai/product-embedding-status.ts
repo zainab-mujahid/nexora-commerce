@@ -51,22 +51,26 @@ export function deriveProductEmbeddingStatus(
 // product has a category_id whose category name could not be read — the
 // status is then unknown rather than guessed (treating it as "no category"
 // could wrongly report a stale embedding as current, or the reverse).
+// `isActive` and `createdAt` ride along (they are already on the row) so
+// maintenance can order its work; neither plays any part in the status.
 export type ProductEmbeddingStatusResult =
-  | { status: ProductEmbeddingStatus }
-  | { status: null; unresolved: "category" };
+  | { status: ProductEmbeddingStatus; isActive: boolean; createdAt: string }
+  | { status: null; unresolved: "category"; isActive: boolean; createdAt: string };
 
 type StatusRow = {
   id: string;
   name: string;
   description: string | null;
   category_id: string | null;
+  is_active: boolean;
+  created_at: string;
   embedding_source_hash: string | null;
   embedding_failed_at: string | null;
   category: { name: string } | null;
 };
 
 const STATUS_SELECT =
-  "id, name, description, category_id, embedding_source_hash, embedding_failed_at, category:categories(name)";
+  "id, name, description, category_id, is_active, created_at, embedding_source_hash, embedding_failed_at, category:categories(name)";
 
 // PostgREST caps a response at the project's max-rows (1000 by default), so
 // an unfiltered read is paged; an id-filtered read is chunked to keep the
@@ -160,7 +164,7 @@ export async function getProductEmbeddingStatuses(
     // getAdminProducts in lib/catalog/products.ts).
     const category = row.category as unknown as { name: string } | null;
     if (row.category_id !== null && category === null) {
-      statuses.set(row.id, { status: null, unresolved: "category" });
+      statuses.set(row.id, { status: null, unresolved: "category", isActive: row.is_active, createdAt: row.created_at });
       continue;
     }
     statuses.set(row.id, {
@@ -172,7 +176,71 @@ export async function getProductEmbeddingStatuses(
         embeddingSourceHash: row.embedding_source_hash,
         embeddingFailedAt: row.embedding_failed_at,
       }),
+      isActive: row.is_active,
+      createdAt: row.created_at,
     });
   }
   return { ok: true, statuses };
+}
+
+// Search-index health of the catalog, counted from the canonical statuses
+// above (never from embedding NULL/non-NULL alone). `unresolved` products
+// are counted separately, never as up to date. `needsAttention` = missing +
+// out of date + repair failed: the products a repair run would work on.
+export type ProductSearchIndexHealth = {
+  total: number;
+  upToDate: number;
+  missing: number;
+  outOfDate: number;
+  repairFailed: number;
+  unresolved: number;
+  needsAttention: number;
+};
+
+// Pure: counts an already-loaded status map.
+export function summarizeProductEmbeddingStatuses(
+  statuses: Map<string, ProductEmbeddingStatusResult>,
+): ProductSearchIndexHealth {
+  const health: ProductSearchIndexHealth = {
+    total: 0,
+    upToDate: 0,
+    missing: 0,
+    outOfDate: 0,
+    repairFailed: 0,
+    unresolved: 0,
+    needsAttention: 0,
+  };
+  for (const entry of statuses.values()) {
+    health.total++;
+    switch (entry.status) {
+      case "up_to_date":
+        health.upToDate++;
+        break;
+      case "missing":
+        health.missing++;
+        break;
+      case "out_of_date":
+        health.outOfDate++;
+        break;
+      case "repair_failed":
+        health.repairFailed++;
+        break;
+      case null:
+        health.unresolved++;
+        break;
+    }
+  }
+  health.needsAttention = health.missing + health.outOfDate + health.repairFailed;
+  return health;
+}
+
+// Health of every product the caller can see — read-only (no Gemini call,
+// no write). Call it from admin-only server code: an admin session sees
+// inactive products too; any other session would get active ones only.
+export async function getProductSearchIndexHealth(): Promise<
+  { ok: true; health: ProductSearchIndexHealth } | { ok: false }
+> {
+  const result = await getProductEmbeddingStatuses();
+  if (!result.ok) return { ok: false };
+  return { ok: true, health: summarizeProductEmbeddingStatuses(result.statuses) };
 }
