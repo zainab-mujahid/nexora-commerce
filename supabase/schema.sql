@@ -100,6 +100,34 @@ alter table public.products add column if not exists embedding extensions.vector
 -- against) rather than created against an empty column.
 
 -- ----------------------------------------------------------------------------
+-- products.embedding_source_hash / embedding_failed_at — embedding lifecycle
+-- hardening, Phase A (schema only; nothing reads or writes these yet)
+--
+-- embedding_source_hash: fingerprint of exactly what the stored embedding
+-- was generated from (embedding model, dimensions, and the product's
+-- embedding text). Comparing it with the fingerprint of the product's
+-- CURRENT name/description/category tells whether the embedding is current
+-- or stale; NULL means "not known to be current" (no embedding yet, or one
+-- written before this column existed). Written together with `embedding`,
+-- never on its own.
+--
+-- embedding_failed_at: when the latest attempt to (re)generate this
+-- product's embedding failed; NULL when there is no recorded failure.
+-- Observability only.
+--
+-- Both nullable with no default: existing rows keep their embedding and get
+-- NULL here, which correctly reads as "needs repair" without touching the
+-- embedding that search and the assistant already use. Retrieval
+-- (match_products, search_catalog_products) still depends only on
+-- `embedding is not null` and never reads these columns. No index: repair
+-- scans read the whole (small) catalog anyway. Covered by the existing
+-- table grants and RLS (products_select_active_or_admin /
+-- products_write_admin), like every other product column.
+-- ----------------------------------------------------------------------------
+alter table public.products add column if not exists embedding_source_hash text;
+alter table public.products add column if not exists embedding_failed_at timestamptz;
+
+-- ----------------------------------------------------------------------------
 -- product_images
 -- Stores only the S3 object key + metadata. The binary lives in S3; this row
 -- is what the app uses to build the public URL (S3_PUBLIC_BASE_URL + s3_key).
