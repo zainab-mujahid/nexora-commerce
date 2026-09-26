@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { AiShoppingAssistant } from "@/app/_components/ai-shopping-assistant";
-import { EmptyState } from "@/app/_components/empty-state";
+import { CatalogEmptyState } from "@/app/_components/catalog-empty-state";
 import { ProductGrid } from "@/app/_components/product-grid";
 import { ProductSearchInput } from "@/app/_components/product-search-input";
 import { getCategories } from "@/lib/catalog/categories";
@@ -69,13 +69,17 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
   const hasFilters = Boolean(q || category);
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Shop</h1>
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Shop</h1>
         {totalCount > 0 && (
           <p className="text-sm text-muted">
             {totalCount} product{totalCount === 1 ? "" : "s"}
-            {q ? ` matching "${q}"` : ""}
+            {q && (
+              <>
+                {" "}matching &quot;<span className="font-medium text-foreground">{q}</span>&quot;
+              </>
+            )}
           </p>
         )}
       </div>
@@ -86,13 +90,13 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       <form
         key={`${q ?? ""}|${sort}|${category ?? ""}`}
         action="/products"
-        className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3 shadow-[var(--shadow-card)] sm:flex-row sm:items-center sm:justify-between"
       >
         {category && <input type="hidden" name="category" value={category} />}
-        <ProductSearchInput className="w-full max-w-sm" defaultValue={q ?? ""} />
+        <ProductSearchInput className="w-full sm:max-w-sm" defaultValue={q ?? ""} />
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm">
-            <span className="text-muted">Sort by</span>
+            <span className="whitespace-nowrap text-muted">Sort by</span>
             <select
               name="sort"
               defaultValue={sort}
@@ -162,12 +166,13 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       <AiShoppingAssistant
         catalogKey={buildHref(currentParams, { page: page > 1 ? String(page) : undefined })}
       >
-        <div className="border-t border-border pt-6">
-          <h2 className="text-lg font-semibold tracking-tight">All Products</h2>
+        <div className="border-b border-border pb-4">
+          <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">All Products</h2>
         </div>
 
         {products.length === 0 ? (
-          <EmptyState
+          <CatalogEmptyState
+            icon={hasFilters ? "search" : "box"}
             message={
               hasFilters
                 ? "No products match your search or filters."
@@ -179,31 +184,31 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
             <ProductGrid products={products} />
 
             {totalPages > 1 && (
-              <nav className="flex items-center justify-center gap-4 text-sm" aria-label="Pagination">
+              <nav className="flex items-center justify-center gap-3 pt-2 text-sm" aria-label="Pagination">
                 {page > 1 ? (
                   <Link
                     href={buildHref(currentParams, { page: String(page - 1) })}
-                    className="link-action"
+                    className="btn btn-secondary btn-sm"
                   >
                     &larr; Previous
                   </Link>
                 ) : (
-                  <span className="text-foreground/30" aria-disabled="true">
+                  <span className="btn btn-secondary btn-sm cursor-not-allowed opacity-50" aria-disabled="true">
                     &larr; Previous
                   </span>
                 )}
-                <span className="text-muted">
+                <span className="px-2 text-muted tabular-nums">
                   Page {page} of {totalPages}
                 </span>
                 {page < totalPages ? (
                   <Link
                     href={buildHref(currentParams, { page: String(page + 1) })}
-                    className="link-action"
+                    className="btn btn-secondary btn-sm"
                   >
                     Next &rarr;
                   </Link>
                 ) : (
-                  <span className="text-foreground/30" aria-disabled="true">
+                  <span className="btn btn-secondary btn-sm cursor-not-allowed opacity-50" aria-disabled="true">
                     Next &rarr;
                   </span>
                 )}

@@ -25,7 +25,7 @@ export function AddToCartForm({
   const canIncrease = !pending && quantity < maxQuantity;
 
   return (
-    <form action={formAction} className="flex flex-col gap-2">
+    <form action={formAction} className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <div
           role="group"
@@ -37,13 +37,13 @@ export function AddToCartForm({
             aria-label="Decrease quantity"
             disabled={!canDecrease}
             onClick={() => canDecrease && setQuantity((q) => q - 1)}
-            className="flex h-[2.125rem] w-9 items-center justify-center text-sm font-medium transition-colors hover:bg-fill disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
+            className="flex h-[2.375rem] w-10 items-center justify-center text-sm font-medium transition-colors hover:bg-fill disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
           >
             &minus;
           </button>
           <span
             aria-live="polite"
-            className="w-10 border-x border-input py-1.5 text-center text-sm tabular-nums"
+            className="w-11 border-x border-input py-2 text-center text-sm font-medium tabular-nums"
           >
             {quantity}
           </span>
@@ -52,7 +52,7 @@ export function AddToCartForm({
             aria-label="Increase quantity"
             disabled={!canIncrease}
             onClick={() => canIncrease && setQuantity((q) => q + 1)}
-            className="flex h-[2.125rem] w-9 items-center justify-center text-sm font-medium transition-colors hover:bg-fill disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
+            className="flex h-[2.375rem] w-10 items-center justify-center text-sm font-medium transition-colors hover:bg-fill disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
           >
             +
           </button>
@@ -61,7 +61,7 @@ export function AddToCartForm({
         <button
           type="submit"
           disabled={pending}
-          className="btn btn-primary"
+          className="btn btn-primary btn-lg flex-1"
         >
           {pending ? "Adding…" : "Add to cart"}
         </button>

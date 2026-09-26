@@ -18,7 +18,8 @@ export function WishlistButton({
   if (wishlistItemId) {
     return (
       <form action={removeWishlistItem.bind(null, wishlistItemId)}>
-        <button type="submit" className="btn btn-secondary">
+        <button type="submit" className="btn btn-secondary btn-lg w-full">
+          <HeartIcon filled />
           Remove from wishlist
         </button>
       </form>
@@ -26,6 +27,22 @@ export function WishlistButton({
   }
 
   return <AddToWishlistForm productId={productId} />;
+}
+
+function HeartIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+      className="size-4"
+    >
+      <path d="M10 16.5s-6.5-3.9-6.5-8.6A3.4 3.4 0 0 1 10 5.8a3.4 3.4 0 0 1 6.5 2.1c0 4.7-6.5 8.6-6.5 8.6Z" />
+    </svg>
+  );
 }
 
 function AddToWishlistForm({ productId }: { productId: string }) {
@@ -40,8 +57,9 @@ function AddToWishlistForm({ productId }: { productId: string }) {
         <button
           type="submit"
           disabled={pending}
-          className="btn btn-secondary"
+          className="btn btn-secondary btn-lg w-full"
         >
+          <HeartIcon filled={false} />
           {pending ? "Saving…" : "Add to wishlist"}
         </button>
       </form>

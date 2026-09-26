@@ -1,7 +1,11 @@
+import Link from "next/link";
+
 import { ProductGrid, ProductGridSkeleton } from "@/app/_components/product-grid";
 import { getActiveProducts } from "@/lib/catalog/products";
 
 const FEATURED_LIMIT = 4;
+
+const SECTION_CLASS = "mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 pb-24 sm:px-6";
 
 // Unlike the dedicated /products page, a failure here must not take down
 // the whole homepage over a secondary section — caught locally instead of
@@ -17,10 +21,15 @@ export async function FeaturedProducts() {
   if (products.length === 0) return null;
 
   return (
-    <section className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-24">
-      <h2 className="text-lg font-semibold tracking-tight">
-        Featured products
-      </h2>
+    <section className={SECTION_CLASS}>
+      <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
+        <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">
+          Featured products
+        </h2>
+        <Link href="/products" className="link-action shrink-0 text-sm">
+          View all <span aria-hidden="true">&rarr;</span>
+        </Link>
+      </div>
       <ProductGrid products={products} />
     </section>
   );
@@ -28,8 +37,10 @@ export async function FeaturedProducts() {
 
 export function FeaturedProductsSkeleton() {
   return (
-    <section className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-24">
-      <div className="h-6 w-40 animate-pulse rounded bg-fill" />
+    <section className={SECTION_CLASS}>
+      <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
+        <div className="h-7 w-48 rounded bg-fill motion-safe:animate-pulse" />
+      </div>
       <ProductGridSkeleton count={4} />
     </section>
   );

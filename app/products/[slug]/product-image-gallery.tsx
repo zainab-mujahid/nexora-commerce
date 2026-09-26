@@ -2,14 +2,15 @@
 
 import { useState } from "react";
 
+import { ProductImageFrame } from "@/app/_components/product-image-frame";
 import { pickDisplayImage } from "@/app/_components/product-image-display";
-import { ProductImagePlaceholder } from "@/app/_components/product-image-placeholder";
 import type { ProductImage } from "@/lib/catalog/types";
 
-// Product detail page only — product cards/listing pages keep using
-// ProductImageDisplay (primary/first image, no thumbnails). images arrive
-// already ordered by sort_order (lib/catalog/products.ts), which is what
-// this renders the thumbnail strip in.
+// Product detail page only — product cards/listing pages show just the
+// primary/first image. images arrive already ordered by sort_order
+// (lib/catalog/products.ts), which is what this renders the thumbnail strip
+// in. The main image is contained (not cropped) in its frame so the whole
+// product stays visible whatever the source aspect ratio.
 export function ProductImageGallery({
   images,
   alt,
@@ -22,28 +23,20 @@ export function ProductImageGallery({
   const initial = pickDisplayImage(images);
   const [selectedId, setSelectedId] = useState(initial?.id ?? null);
 
+  const frame = "aspect-square w-full rounded-xl ring-1 ring-inset ring-border";
+
   if (images.length === 0 || !initial) {
-    return (
-      <ProductImagePlaceholder
-        className={`aspect-square w-full rounded-md ${className}`}
-      />
-    );
+    return <ProductImageFrame image={null} alt={alt} className={`${frame} ${className}`} />;
   }
 
   const selected = images.find((image) => image.id === selectedId) ?? initial;
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- S3_PUBLIC_BASE_URL
-          is a runtime env value, not a static domain next/image can target. */}
-      <img
-        src={selected.url}
-        alt={selected.alt_text || alt}
-        className="aspect-square w-full rounded-md object-cover"
-      />
+      <ProductImageFrame key={selected.id} image={selected} alt={alt} fit="contain" className={frame} />
 
       {images.length > 1 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 py-1">
           {images.map((image) => {
             const isSelected = image.id === selected.id;
             return (
@@ -53,14 +46,13 @@ export function ProductImageGallery({
                 onClick={() => setSelectedId(image.id)}
                 aria-pressed={isSelected}
                 aria-label={image.alt_text || alt}
-                className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 transition-colors ${
+                className={`size-16 shrink-0 overflow-hidden rounded-lg transition-shadow sm:size-20 ${
                   isSelected
-                    ? "border-foreground"
-                    : "border-transparent hover:border-input"
+                    ? "ring-2 ring-foreground ring-offset-2 ring-offset-background"
+                    : "ring-1 ring-border hover:ring-input"
                 }`}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={image.url} alt="" className="h-full w-full object-cover" />
+                <ProductImageFrame image={image} alt="" className="size-full" />
               </button>
             );
           })}

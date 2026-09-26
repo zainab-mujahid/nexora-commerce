@@ -345,4 +345,13 @@
     border-radius: var(--radius-md);
     background: var(--fill);
   }
+
+  /* ---- Storefront (customer shopping pages only) ---- */
+  /* Home hero panel: surface with one very faint radial tint, derived from
+     the theme tokens so it reads correctly in both themes. */
+  .hero-surface {
+    background:
+      radial-gradient(120% 90% at 100% 0%, color-mix(in oklab, var(--foreground) 6%, transparent), transparent 60%),
+      var(--surface);
+  }
 }
