@@ -1,7 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
-import { EmptyState } from "@/app/_components/empty-state";
 import { requireUser } from "@/lib/auth/dal";
 import { getAddresses } from "@/lib/addresses/queries";
 import { getCartSummary } from "@/lib/cart/queries";
@@ -25,15 +24,15 @@ export default async function CheckoutPage() {
 
   if (items.length === 0) {
     return (
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Checkout</h1>
-        <EmptyState
-          title="Your cart is empty"
-          message="Add items to your cart before checking out."
-        />
-        <Link href="/products" className="link-action self-start text-sm">
-          Continue shopping
-        </Link>
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+        <CheckoutHeading />
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
+          <p className="font-medium">Your cart is empty</p>
+          <p className="max-w-sm text-sm text-muted">Add items to your cart before checking out.</p>
+          <Link href="/products" className="btn btn-secondary mt-2">
+            Continue shopping
+          </Link>
+        </div>
       </main>
     );
   }
@@ -53,16 +52,22 @@ export default async function CheckoutPage() {
   );
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Checkout</h1>
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+      <CheckoutHeading />
 
       {hasBlockingIssue && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
-          Some items in your cart are no longer available.{" "}
-          <Link href="/cart" className="font-medium underline">
-            Review your cart
-          </Link>{" "}
-          before placing your order.
+        <p className="flex gap-2.5 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="mt-0.5 size-4 shrink-0">
+            <circle cx="10" cy="10" r="7.5" />
+            <path d="M10 6.5v4M10 13.5h.01" />
+          </svg>
+          <span>
+            Some items in your cart are no longer available.{" "}
+            <Link href="/cart" className="font-medium underline">
+              Review your cart
+            </Link>{" "}
+            before placing your order.
+          </span>
         </p>
       )}
 
@@ -73,5 +78,18 @@ export default async function CheckoutPage() {
         disableSubmit={hasBlockingIssue}
       />
     </main>
+  );
+}
+
+// Page heading plus a quiet way back to the cart (a plain link — checkout
+// holds no state of its own to lose).
+function CheckoutHeading() {
+  return (
+    <div className="flex flex-col gap-3">
+      <Link href="/cart" className="nav-link inline-flex w-fit items-center gap-1.5 text-sm">
+        <span aria-hidden="true">&larr;</span> Back to cart
+      </Link>
+      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Checkout</h1>
+    </div>
   );
 }
