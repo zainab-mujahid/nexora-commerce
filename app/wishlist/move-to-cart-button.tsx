@@ -21,7 +21,7 @@ export function MoveToCartButton({ wishlistItemId }: { wishlistItemId: string })
         <button
           type="submit"
           disabled={pending}
-          className="btn btn-secondary btn-sm"
+          className="btn btn-primary w-full"
         >
           {pending ? "Moving…" : "Move to cart"}
         </button>

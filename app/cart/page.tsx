@@ -1,8 +1,9 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
-import { EmptyState } from "@/app/_components/empty-state";
-import { ProductImageDisplay } from "@/app/_components/product-image-display";
+import { pickDisplayImage } from "@/app/_components/product-image-display";
+import { ProductImageFrame } from "@/app/_components/product-image-frame";
+import { ShoppingEmptyState } from "@/app/_components/shopping-empty-state";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getCartSummary } from "@/lib/cart/queries";
@@ -14,6 +15,8 @@ export const metadata: Metadata = {
   title: "Cart",
 };
 
+const THUMB = "size-20 shrink-0 rounded-md ring-1 ring-inset ring-border sm:size-24";
+
 export default async function CartPage() {
   // getCartSummary()/getCartItems() already gate on requireUser() — this
   // repeats the check at the page level too, the same defense-in-depth
@@ -23,14 +26,15 @@ export default async function CartPage() {
   const { items, subtotal } = await getCartSummary();
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Cart</h1>
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Cart</h1>
 
       {items.length === 0 ? (
-        <EmptyState message="Your cart is empty." />
+        <ShoppingEmptyState icon="bag" message="Your cart is empty." />
       ) : (
-        <>
-          <ul className="flex flex-col gap-4">
+        <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
+          {/* Item rows are the list's only <li>s (browser tests read them). */}
+          <ul className="card divide-y divide-border">
             {items.map((item) => {
               // The product row still exists (product_id cascades on delete,
               // so a deleted product's cart_items row would be gone too) but
@@ -43,19 +47,20 @@ export default async function CartPage() {
               if (!item.product) {
                 const label = item.unavailableProduct;
                 return (
-                  <li
-                    key={item.id}
-                    className="flex gap-4 card p-4 opacity-70"
-                  >
-                    <ProductImageDisplay
-                      images={label?.images ?? []}
+                  <li key={item.id} className="flex gap-4 p-4 sm:gap-5 sm:p-5">
+                    <ProductImageFrame
+                      image={pickDisplayImage(label?.images ?? [])}
                       alt={label?.name ?? "Unavailable product"}
-                      className="h-24 w-24 shrink-0 rounded-md"
+                      className={`${THUMB} opacity-60`}
                     />
-                    <div className="flex flex-1 flex-col gap-2">
-                      <p className="font-medium">{label?.name ?? "Unavailable item"}</p>
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                      <p className="font-medium text-muted [overflow-wrap:anywhere]">
+                        {label?.name ?? "Unavailable item"}
+                      </p>
                       <p className="text-sm text-red-600 dark:text-red-400">No longer available.</p>
-                      <RemoveCartItemButton cartItemId={item.id} />
+                      <div className="mt-auto">
+                        <RemoveCartItemButton cartItemId={item.id} />
+                      </div>
                     </div>
                   </li>
                 );
@@ -69,30 +74,27 @@ export default async function CartPage() {
                 item.quantity > item.product.stock;
 
               return (
-                <li
-                  key={item.id}
-                  className="flex gap-4 card p-4"
-                >
-                  <ProductImageDisplay
-                    images={item.product.images}
+                <li key={item.id} className="flex gap-4 p-4 sm:gap-5 sm:p-5">
+                  <ProductImageFrame
+                    image={pickDisplayImage(item.product.images)}
                     alt={item.product.name}
-                    className="h-24 w-24 shrink-0 rounded-md"
+                    className={`${THUMB} ${isUnavailable ? "opacity-60" : ""}`}
                   />
 
-                  <div className="flex flex-1 flex-col gap-2">
-                    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-                      <div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex min-w-0 flex-col gap-1">
                         <Link
                           href={`/products/${item.product.slug}`}
-                          className="font-medium underline-offset-4 hover:underline"
+                          className="font-medium leading-snug underline-offset-4 [overflow-wrap:anywhere] hover:underline"
                         >
                           {item.product.name}
                         </Link>
-                        <p className="text-sm text-muted">
+                        <p className="text-sm text-muted tabular-nums">
                           {formatPrice(item.product.price)} each
                         </p>
                       </div>
-                      <p className="font-medium">
+                      <p className="shrink-0 font-semibold tabular-nums">
                         {formatPrice(Number(item.product.price) * item.quantity)}
                       </p>
                     </div>
@@ -104,40 +106,53 @@ export default async function CartPage() {
                           : "No longer available."}
                       </p>
                     ) : (
-                      <>
-                        {exceedsStock && (
-                          <p className="text-sm text-red-600 dark:text-red-400">
-                            Only {item.product.stock} in stock — update the
-                            quantity below.
-                          </p>
-                        )}
+                      exceedsStock && (
+                        <p className="text-sm text-red-600 dark:text-red-400">
+                          Only {item.product.stock} in stock — update the
+                          quantity below.
+                        </p>
+                      )
+                    )}
+
+                    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                      {!isUnavailable && (
                         <UpdateQuantityForm
                           cartItemId={item.id}
                           quantity={item.quantity}
                           maxQuantity={item.product.stock}
                         />
-                      </>
-                    )}
-
-                    <RemoveCartItemButton cartItemId={item.id} />
+                      )}
+                      <div className="ml-auto flex h-9 items-center">
+                        <RemoveCartItemButton cartItemId={item.id} />
+                      </div>
+                    </div>
                   </div>
                 </li>
               );
             })}
           </ul>
 
-          <div className="flex items-center justify-between border-t border-border pt-4 text-lg font-semibold">
-            <span>Subtotal</span>
-            <span>{formatPrice(subtotal)}</span>
-          </div>
-
-          <Link
-            href="/checkout"
-            className="btn btn-primary btn-lg self-end"
+          <section
+            aria-labelledby="cart-summary-heading"
+            className="card flex flex-col gap-5 p-5 sm:p-6 lg:sticky lg:top-8"
           >
-            Proceed to checkout
-          </Link>
-        </>
+            <h2 id="cart-summary-heading" className="text-lg font-semibold tracking-tight">
+              Order summary
+            </h2>
+            <div className="flex items-baseline justify-between gap-4 border-t border-border pt-5 text-base font-semibold">
+              <span>Subtotal</span>
+              <span className="text-xl tracking-tight tabular-nums">{formatPrice(subtotal)}</span>
+            </div>
+            <div className="flex flex-col gap-3">
+              <Link href="/checkout" className="btn btn-primary btn-lg w-full">
+                Proceed to checkout
+              </Link>
+              <Link href="/products" className="link-action self-center text-sm text-muted">
+                Continue shopping
+              </Link>
+            </div>
+          </section>
+        </div>
       )}
     </main>
   );

@@ -19,8 +19,13 @@ export function UpdateQuantityForm({
   );
 
   return (
-    <div className="flex flex-col gap-1">
-      <form action={formAction} className="flex items-center gap-2">
+    <div className="flex flex-col gap-1.5">
+      {/* One joined control: the number field and its Update submit. Same
+          explicit-submit behaviour as before, only presented as a group. */}
+      <form
+        action={formAction}
+        className="inline-flex h-9 w-fit items-stretch overflow-hidden rounded-md border border-input bg-surface focus-within:border-ring focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_18%,transparent)]"
+      >
         <input
           type="number"
           name="quantity"
@@ -29,12 +34,12 @@ export function UpdateQuantityForm({
           defaultValue={quantity}
           disabled={pending}
           aria-label="Quantity"
-          className="field h-8 min-h-8 w-16 px-2 py-1"
+          className="w-16 bg-transparent px-2 text-center text-sm font-medium tabular-nums outline-none disabled:cursor-not-allowed disabled:text-subtle"
         />
         <button
           type="submit"
           disabled={pending}
-          className="btn btn-secondary btn-sm"
+          className="border-l border-input px-3 text-xs font-medium transition-colors hover:bg-fill focus-visible:bg-fill focus-visible:outline-none disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
         >
           {pending ? "Updating…" : "Update"}
         </button>
