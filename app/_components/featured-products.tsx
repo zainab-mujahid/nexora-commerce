@@ -29,7 +29,7 @@ export async function FeaturedProducts() {
 export function FeaturedProductsSkeleton() {
   return (
     <section className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-24">
-      <div className="h-6 w-40 animate-pulse rounded bg-black/5 dark:bg-white/5" />
+      <div className="h-6 w-40 animate-pulse rounded bg-fill" />
       <ProductGridSkeleton count={4} />
     </section>
   );

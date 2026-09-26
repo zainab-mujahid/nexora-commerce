@@ -43,14 +43,14 @@ export default async function ProductPage({
       <ProductImageGallery
         images={product.images}
         alt={product.name}
-        className="sm:w-80 sm:shrink-0"
+        className="sm:w-80 sm:shrink-0 sm:self-start"
       />
 
       <div className="flex flex-1 flex-col gap-4">
         {product.category && (
           <Link
             href={`/categories/${product.category.slug}`}
-            className="text-xs font-medium text-foreground/60 hover:text-foreground"
+            className="text-xs font-medium text-muted hover:text-foreground"
           >
             {product.category.name}
           </Link>
@@ -68,11 +68,11 @@ export default async function ProductPage({
         </div>
 
         {product.description && (
-          <p className="text-sm text-foreground/70">{product.description}</p>
+          <p className="text-sm text-muted">{product.description}</p>
         )}
 
         {!product.is_active ? (
-          <p className="text-sm text-foreground/60">
+          <p className="text-sm text-muted">
             This product isn&apos;t available for purchase.
           </p>
         ) : user ? (
@@ -80,7 +80,7 @@ export default async function ProductPage({
         ) : (
           <Link
             href="/login"
-            className="text-sm underline hover:no-underline"
+            className="btn btn-primary self-start"
           >
             Log in to add to cart
           </Link>

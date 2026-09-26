@@ -28,14 +28,14 @@ export function CheckoutForm({
     <form action={formAction} className="flex flex-col gap-8">
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">Shipping address</h2>
-          <Link href="/account/addresses/new" className="text-sm font-medium hover:opacity-70">
+          <h2 className="text-lg font-semibold tracking-tight">Shipping address</h2>
+          <Link href="/account/addresses/new" className="link-action self-start text-sm">
             Add address
           </Link>
         </div>
 
         {addresses.length === 0 ? (
-          <p className="rounded-md border border-dashed border-black/15 p-4 text-sm text-foreground/60 dark:border-white/20">
+          <p className="empty-state p-4 text-sm text-muted">
             You don&apos;t have any saved addresses yet.{" "}
             <Link href="/account/addresses/new" className="font-medium underline">
               Add one
@@ -47,10 +47,10 @@ export function CheckoutForm({
             {addresses.map((address) => (
               <li key={address.id}>
                 <label
-                  className={`flex cursor-pointer gap-3 rounded-md border p-4 text-sm ${
+                  className={`flex cursor-pointer gap-3 rounded-md border bg-surface p-4 text-sm transition-colors ${
                     selectedAddressId === address.id
-                      ? "border-foreground"
-                      : "border-black/10 dark:border-white/10"
+                      ? "border-foreground ring-1 ring-foreground"
+                      : "border-border hover:border-input"
                   }`}
                 >
                   <input
@@ -65,20 +65,20 @@ export function CheckoutForm({
                     <span className="font-medium">
                       {address.full_name}
                       {address.is_default && (
-                        <span className="ml-2 rounded-full bg-foreground/10 px-2 py-0.5 text-xs font-normal text-foreground/70">
+                        <span className="badge ml-2 align-middle">
                           Default
                         </span>
                       )}
                     </span>
-                    <span className="text-foreground/70">
+                    <span className="text-muted">
                       {address.line1}
                       {address.line2 ? `, ${address.line2}` : ""}
                     </span>
-                    <span className="text-foreground/70">
+                    <span className="text-muted">
                       {address.city}
                       {address.state ? `, ${address.state}` : ""} {address.postal_code}
                     </span>
-                    <span className="text-foreground/70">{address.country}</span>
+                    <span className="text-muted">{address.country}</span>
                   </span>
                 </label>
               </li>
@@ -88,7 +88,7 @@ export function CheckoutForm({
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Order summary</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Order summary</h2>
         <ul className="flex flex-col gap-3">
           {items.map((item) =>
             // See the CartItem["product"] comment in lib/cart/queries.ts —
@@ -98,7 +98,7 @@ export function CheckoutForm({
             item.product ? (
               <li
                 key={item.id}
-                className="flex gap-3 rounded-md border border-black/10 p-3 text-sm dark:border-white/10"
+                className="flex gap-3 card p-3 text-sm"
               >
                 <ProductImageDisplay
                   images={item.product.images}
@@ -108,7 +108,7 @@ export function CheckoutForm({
                 <div className="flex flex-1 items-start justify-between gap-3">
                   <div>
                     <p className="font-medium">{item.product.name}</p>
-                    <p className="text-foreground/60">
+                    <p className="text-muted">
                       {formatPrice(item.product.price)} &times; {item.quantity}
                     </p>
                   </div>
@@ -120,7 +120,7 @@ export function CheckoutForm({
             ) : (
               <li
                 key={item.id}
-                className="flex gap-3 rounded-md border border-black/10 p-3 text-sm opacity-70 dark:border-white/10"
+                className="flex gap-3 card p-3 text-sm opacity-70"
               >
                 <ProductImageDisplay
                   images={item.unavailableProduct?.images ?? []}
@@ -138,8 +138,8 @@ export function CheckoutForm({
           )}
         </ul>
 
-        <div className="flex flex-col gap-1 border-t border-black/10 pt-3 dark:border-white/10">
-          <div className="flex items-center justify-between text-sm text-foreground/60">
+        <div className="flex flex-col gap-1 border-t border-border pt-3">
+          <div className="flex items-center justify-between text-sm text-muted">
             <span>Subtotal</span>
             <span>{formatPrice(subtotal)}</span>
           </div>
@@ -147,7 +147,7 @@ export function CheckoutForm({
             <span>Total</span>
             <span>{formatPrice(subtotal)}</span>
           </div>
-          <p className="text-xs text-foreground/50">
+          <p className="text-xs text-subtle">
             Shipping and taxes aren&apos;t supported yet — the total above is the product
             subtotal only.
           </p>
@@ -159,7 +159,7 @@ export function CheckoutForm({
       <button
         type="submit"
         disabled={pending || disableSubmit || !selectedAddressId}
-        className="self-start rounded-md bg-foreground px-6 py-2.5 text-sm font-medium text-background disabled:opacity-60"
+        className="btn btn-primary btn-lg self-start"
       >
         {pending ? "Placing order…" : "Place order"}
       </button>

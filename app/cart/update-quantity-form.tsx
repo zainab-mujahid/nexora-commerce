@@ -29,12 +29,12 @@ export function UpdateQuantityForm({
           defaultValue={quantity}
           disabled={pending}
           aria-label="Quantity"
-          className="w-16 rounded-md border border-black/15 bg-transparent px-2 py-1 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
+          className="field h-8 min-h-8 w-16 px-2 py-1"
         />
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md border border-black/15 px-3 py-1 text-xs font-medium hover:opacity-70 disabled:opacity-60 dark:border-white/20"
+          className="btn btn-secondary btn-sm"
         >
           {pending ? "Updating…" : "Update"}
         </button>
@@ -43,7 +43,7 @@ export function UpdateQuantityForm({
         <p className="text-xs text-red-600 dark:text-red-400">{state.error}</p>
       )}
       {state && "success" in state && state.message && (
-        <p className="text-xs text-foreground/60">{state.message}</p>
+        <p className="text-xs text-muted">{state.message}</p>
       )}
     </div>
   );

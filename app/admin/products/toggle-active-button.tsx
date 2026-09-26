@@ -11,7 +11,7 @@ export function ToggleActiveButton({
 }) {
   return (
     <form action={toggleProductActive.bind(null, productId, !isActive)}>
-      <button type="submit" className="hover:opacity-70">
+      <button type="submit" className="link-action">
         {isActive ? "Deactivate" : "Activate"}
       </button>
     </form>

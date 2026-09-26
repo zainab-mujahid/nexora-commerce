@@ -10,7 +10,7 @@ export function ProductCard({ product }: { product: ProductListItem }) {
   return (
     <Link
       href={`/products/${product.slug}`}
-      className="flex flex-col gap-2 rounded-md border border-black/10 p-3 transition-colors hover:border-black/25 dark:border-white/10 dark:hover:border-white/25"
+      className="card card-interactive flex flex-col gap-3 p-3"
     >
       <ProductImageDisplay
         images={product.images}
@@ -19,7 +19,7 @@ export function ProductCard({ product }: { product: ProductListItem }) {
       />
       <div className="flex flex-col gap-1">
         <span className="text-sm font-medium">{product.name}</span>
-        <span className="text-sm text-foreground/70">
+        <span className="text-sm font-semibold tabular-nums">
           {formatPrice(product.price)}
         </span>
         <StockBadge stock={product.stock} />

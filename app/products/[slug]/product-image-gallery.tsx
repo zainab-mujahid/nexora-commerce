@@ -56,7 +56,7 @@ export function ProductImageGallery({
                 className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 transition-colors ${
                   isSelected
                     ? "border-foreground"
-                    : "border-transparent hover:border-black/20 dark:hover:border-white/20"
+                    : "border-transparent hover:border-input"
                 }`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}

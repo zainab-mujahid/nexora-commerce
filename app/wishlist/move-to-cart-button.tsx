@@ -21,7 +21,7 @@ export function MoveToCartButton({ wishlistItemId }: { wishlistItemId: string })
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md border border-black/15 px-3 py-1 text-xs font-medium hover:opacity-70 disabled:opacity-60 dark:border-white/20"
+          className="btn btn-secondary btn-sm"
         >
           {pending ? "Moving…" : "Move to cart"}
         </button>

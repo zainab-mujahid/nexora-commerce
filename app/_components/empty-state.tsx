@@ -6,7 +6,7 @@ export function EmptyState({
   message: string;
 }) {
   return (
-    <div className="rounded-md border border-dashed border-black/15 p-8 text-center text-sm text-foreground/60 dark:border-white/20">
+    <div className="empty-state px-6 py-10 text-center text-sm text-muted">
       {title && <p className="mb-1 font-medium text-foreground">{title}</p>}
       <p>{message}</p>
     </div>

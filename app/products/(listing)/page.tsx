@@ -73,7 +73,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Shop</h1>
         {totalCount > 0 && (
-          <p className="text-sm text-foreground/60">
+          <p className="text-sm text-muted">
             {totalCount} product{totalCount === 1 ? "" : "s"}
             {q ? ` matching "${q}"` : ""}
           </p>
@@ -92,11 +92,11 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
         <ProductSearchInput className="w-full max-w-sm" defaultValue={q ?? ""} />
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm">
-            <span className="text-foreground/60">Sort by</span>
+            <span className="text-muted">Sort by</span>
             <select
               name="sort"
               defaultValue={sort}
-              className="rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
+              className="field"
             >
               {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -107,7 +107,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
           </label>
           <button
             type="submit"
-            className="rounded-md border border-black/15 px-3 py-1.5 text-sm font-medium hover:opacity-70 dark:border-white/20"
+            className="btn btn-secondary"
           >
             Apply
           </button>
@@ -118,10 +118,10 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
         <div data-catalog-nav className="flex flex-wrap gap-2">
           <Link
             href={buildHref(currentParams, { category: undefined, q: undefined })}
-            className={`rounded-full border px-3 py-1 text-xs font-medium ${
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
               !category
                 ? "border-foreground bg-foreground text-background"
-                : "border-black/15 hover:bg-black/[.04] dark:border-white/20 dark:hover:bg-white/[.06]"
+                : "border-border bg-surface text-muted hover:border-input hover:text-foreground"
             }`}
           >
             All
@@ -133,10 +133,10 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                 category: category === cat.slug ? undefined : cat.slug,
                 q: undefined,
               })}
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                 category === cat.slug
                   ? "border-foreground bg-foreground text-background"
-                  : "border-black/15 hover:bg-black/[.04] dark:border-white/20 dark:hover:bg-white/[.06]"
+                  : "border-border bg-surface text-muted hover:border-input hover:text-foreground"
               }`}
             >
               {cat.name}
@@ -162,7 +162,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       <AiShoppingAssistant
         catalogKey={buildHref(currentParams, { page: page > 1 ? String(page) : undefined })}
       >
-        <div className="border-t border-black/10 pt-6 dark:border-white/10">
+        <div className="border-t border-border pt-6">
           <h2 className="text-lg font-semibold tracking-tight">All Products</h2>
         </div>
 
@@ -183,7 +183,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                 {page > 1 ? (
                   <Link
                     href={buildHref(currentParams, { page: String(page - 1) })}
-                    className="hover:opacity-70"
+                    className="link-action"
                   >
                     &larr; Previous
                   </Link>
@@ -192,13 +192,13 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                     &larr; Previous
                   </span>
                 )}
-                <span className="text-foreground/60">
+                <span className="text-muted">
                   Page {page} of {totalPages}
                 </span>
                 {page < totalPages ? (
                   <Link
                     href={buildHref(currentParams, { page: String(page + 1) })}
-                    className="hover:opacity-70"
+                    className="link-action"
                   >
                     Next &rarr;
                   </Link>

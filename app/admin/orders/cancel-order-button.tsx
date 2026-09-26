@@ -24,18 +24,18 @@ export function CancelOrderButton({
       <button
         type="submit"
         disabled={pending || !canCancel}
-        className="self-start rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-red-900 dark:hover:bg-red-950"
+        className="btn btn-danger self-start"
       >
         {pending ? "Cancelling…" : "Cancel order"}
       </button>
       {!canCancel && (
-        <p className="text-xs text-foreground/60">
+        <p className="text-xs text-muted">
           Only pending or processing orders can be cancelled.
         </p>
       )}
       {state && "error" in state && <p className="text-xs text-red-600 dark:text-red-400">{state.error}</p>}
       {state && "success" in state && (
-        <p className="text-xs text-green-600">Order cancelled and stock restored.</p>
+        <p className="text-xs text-success">Order cancelled and stock restored.</p>
       )}
     </form>
   );

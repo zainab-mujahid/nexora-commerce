@@ -26,7 +26,7 @@ export function OrderStatusForm({
           defaultValue={status}
           disabled={pending || isCancelled}
           aria-label="Order status"
-          className="rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm outline-none focus:border-foreground/50 disabled:opacity-60 dark:border-white/20"
+          className="field"
         >
           {isCancelled && <option value="cancelled">Cancelled</option>}
           {ORDER_STATUSES.map((value) => (
@@ -38,19 +38,19 @@ export function OrderStatusForm({
         <button
           type="submit"
           disabled={pending || isCancelled}
-          className="rounded-md border border-black/15 px-3 py-1.5 text-sm font-medium hover:opacity-70 disabled:opacity-60 dark:border-white/20"
+          className="btn btn-secondary"
         >
           {pending ? "Updating…" : "Update status"}
         </button>
       </div>
       {isCancelled && (
-        <p className="text-xs text-foreground/60">
+        <p className="text-xs text-muted">
           This order is cancelled and can no longer change status.
         </p>
       )}
       {state && "error" in state && <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>}
       {state && "success" in state && (
-        <p className="text-sm text-green-600">Status updated.</p>
+        <p className="text-sm text-success">Status updated.</p>
       )}
     </form>
   );

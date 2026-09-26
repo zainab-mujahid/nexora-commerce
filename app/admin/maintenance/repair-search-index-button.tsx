@@ -46,13 +46,13 @@ export function RepairSearchIndexButton({ needsAttention }: { needsAttention: nu
   const feedbackClass = !result
     ? ""
     : result.status === "completed" && result.failed > 0
-      ? "text-red-600 dark:text-red-400"
+      ? "text-danger"
       : result.status === "completed" &&
           result.stoppedReason === "complete" &&
           result.superseded === 0 &&
           result.remaining === 0
-        ? "text-green-700 dark:text-green-400"
-        : "text-foreground/60";
+        ? "text-success"
+        : "text-muted";
 
   return (
     <div className="flex flex-col gap-2">
@@ -61,11 +61,11 @@ export function RepairSearchIndexButton({ needsAttention }: { needsAttention: nu
           type="button"
           onClick={repair}
           disabled={pending || needsAttention === 0}
-          className="rounded-md border border-black/15 px-3 py-1.5 text-sm font-medium hover:opacity-70 disabled:opacity-60 disabled:hover:opacity-60 dark:border-white/20"
+          className="btn btn-secondary"
         >
           {pending ? "Repairing…" : "Repair search index"}
         </button>
-        <p className="text-xs text-foreground/60">
+        <p className="text-xs text-muted">
           {needsAttention === 0
             ? "Nothing needs repair."
             : "Repairs a limited batch of the products listed as Missing, Out of date or Repair failed. Up-to-date products are skipped. Run again to continue if more remain."}

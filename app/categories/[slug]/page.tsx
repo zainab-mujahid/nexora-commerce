@@ -33,7 +33,7 @@ export default async function CategoryPage({
           {category.name}
         </h1>
         {category.description && (
-          <p className="text-sm text-foreground/60">{category.description}</p>
+          <p className="text-sm text-muted">{category.description}</p>
         )}
       </div>
 

@@ -19,7 +19,7 @@ export default async function AdminCategoriesPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Categories</h1>
         <Link
           href="/admin/categories/new"
-          className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90"
+          className="btn btn-primary"
         >
           New category
         </Link>
@@ -28,34 +28,32 @@ export default async function AdminCategoriesPage() {
       {categories.length === 0 ? (
         <EmptyState message="No categories yet." />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+        <div className="table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b border-black/10 text-foreground/60 dark:border-white/10">
-                <th className="py-2 pr-4 font-medium">Name</th>
-                <th className="py-2 pr-4 font-medium">Slug</th>
-                <th className="py-2 pr-4 font-medium">Description</th>
-                <th className="py-2 pr-4 font-medium" />
+              <tr>
+                <th>Name</th>
+                <th>Slug</th>
+                <th>Description</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {categories.map((category) => (
                 <tr
-                  key={category.id}
-                  className="border-b border-black/5 dark:border-white/5"
-                >
-                  <td className="py-2 pr-4">{category.name}</td>
-                  <td className="py-2 pr-4 text-foreground/60">
+                  key={category.id}>
+                  <td className="font-medium">{category.name}</td>
+                  <td className="text-muted">
                     {category.slug}
                   </td>
-                  <td className="py-2 pr-4 text-foreground/60">
+                  <td className="text-muted">
                     {category.description || "—"}
                   </td>
-                  <td className="py-2 pr-4">
+                  <td>
                     <div className="flex gap-3">
                       <Link
                         href={`/admin/categories/${category.id}`}
-                        className="hover:opacity-70"
+                        className="link-action"
                       >
                         Edit
                       </Link>

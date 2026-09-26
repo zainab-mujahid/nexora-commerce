@@ -15,7 +15,7 @@ export default async function NewAddressPage() {
   const addresses = await getAddresses();
 
   return (
-    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-6 py-16">
+    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">New address</h1>
       <AddressForm isFirstAddress={addresses.length === 0} />
     </main>

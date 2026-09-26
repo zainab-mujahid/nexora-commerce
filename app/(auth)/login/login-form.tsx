@@ -37,12 +37,12 @@ export function LoginForm({ next }: { next?: string }) {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+        className="btn btn-primary"
       >
         {pending ? "Signing in…" : "Sign in"}
       </button>
 
-      <p className="text-sm text-foreground/70">
+      <p className="text-sm text-muted">
         No account?{" "}
         <Link href="/signup" className="underline">
           Create one

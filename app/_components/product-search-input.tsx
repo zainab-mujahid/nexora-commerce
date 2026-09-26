@@ -18,12 +18,12 @@ export function ProductSearchInput({
         defaultValue={defaultValue}
         placeholder="Search products…"
         aria-label="Search products"
-        className="w-full rounded-md border border-black/15 bg-transparent py-1.5 pl-3 pr-9 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
+        className="field w-full pr-9"
       />
       <button
         type="submit"
         aria-label="Search products"
-        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-md text-foreground/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground/40"
+        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-md text-subtle hover:text-foreground focus-visible:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground/40"
       >
         <svg
           aria-hidden="true"

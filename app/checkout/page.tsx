@@ -31,7 +31,7 @@ export default async function CheckoutPage() {
           title="Your cart is empty"
           message="Add items to your cart before checking out."
         />
-        <Link href="/products" className="self-start text-sm font-medium hover:opacity-70">
+        <Link href="/products" className="link-action self-start text-sm">
           Continue shopping
         </Link>
       </main>

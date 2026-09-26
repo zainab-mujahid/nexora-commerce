@@ -45,7 +45,7 @@ export default async function CartPage() {
                 return (
                   <li
                     key={item.id}
-                    className="flex gap-4 rounded-md border border-black/10 p-4 opacity-70 dark:border-white/10"
+                    className="flex gap-4 card p-4 opacity-70"
                   >
                     <ProductImageDisplay
                       images={label?.images ?? []}
@@ -71,7 +71,7 @@ export default async function CartPage() {
               return (
                 <li
                   key={item.id}
-                  className="flex gap-4 rounded-md border border-black/10 p-4 dark:border-white/10"
+                  className="flex gap-4 card p-4"
                 >
                   <ProductImageDisplay
                     images={item.product.images}
@@ -84,11 +84,11 @@ export default async function CartPage() {
                       <div>
                         <Link
                           href={`/products/${item.product.slug}`}
-                          className="font-medium hover:opacity-70"
+                          className="font-medium underline-offset-4 hover:underline"
                         >
                           {item.product.name}
                         </Link>
-                        <p className="text-sm text-foreground/60">
+                        <p className="text-sm text-muted">
                           {formatPrice(item.product.price)} each
                         </p>
                       </div>
@@ -126,14 +126,14 @@ export default async function CartPage() {
             })}
           </ul>
 
-          <div className="flex items-center justify-between border-t border-black/10 pt-4 text-lg font-semibold dark:border-white/10">
+          <div className="flex items-center justify-between border-t border-border pt-4 text-lg font-semibold">
             <span>Subtotal</span>
             <span>{formatPrice(subtotal)}</span>
           </div>
 
           <Link
             href="/checkout"
-            className="self-end rounded-md bg-foreground px-6 py-2.5 text-sm font-medium text-background hover:opacity-90"
+            className="btn btn-primary btn-lg self-end"
           >
             Proceed to checkout
           </Link>

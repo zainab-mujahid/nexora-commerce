@@ -3,7 +3,7 @@
 export function ProductImagePlaceholder({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`flex items-center justify-center bg-black/5 text-foreground/25 dark:bg-white/5 ${className}`}
+      className={`flex items-center justify-center bg-fill text-subtle ${className}`}
       aria-hidden="true"
     >
       <svg

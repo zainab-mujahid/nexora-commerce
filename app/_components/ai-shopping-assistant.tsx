@@ -224,7 +224,7 @@ export function AiShoppingAssistant({
           <button
             type="button"
             onClick={() => setViewAllProducts(true)}
-            className="self-start text-sm font-medium text-foreground/60 underline-offset-4 hover:text-foreground hover:underline"
+            className="self-start text-sm font-medium text-muted underline-offset-4 hover:text-foreground hover:underline"
           >
             View All Products
           </button>
@@ -241,8 +241,13 @@ export function AiShoppingAssistant({
         onClick={() => setIsOpen((open) => !open)}
         aria-expanded={isOpen}
         aria-controls="ai-shopping-assistant-panel"
-        className="fixed bottom-6 right-6 z-50 rounded-full bg-foreground px-5 py-3 text-sm font-medium text-background shadow-lg hover:opacity-90"
+        // theme-inverse: the launcher shares the panel's inverse surface
+        // (dark on the light theme, light on the dark theme).
+        className="theme-inverse fixed bottom-6 right-6 z-50 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-5 py-3 text-sm font-medium shadow-[var(--shadow-float)] transition-colors hover:bg-fill"
       >
+        <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" className="size-4 opacity-80">
+          <path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5l-1.6-4.4L4 8.5l4.4-1.6L10 2.5zM15.5 13l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8z" />
+        </svg>
         {isOpen ? "Close Assistant" : "AI Shopping Assistant"}
       </button>
 
@@ -262,15 +267,15 @@ export function AiShoppingAssistant({
           // right-side drawer — sm:inset-x-auto/sm:top-auto undo the
           // mobile inset-x-0/bottom-0 positioning so the explicit
           // bottom/right/width/height values below take over.
-          className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden border-t border-black/10 bg-surface sm:inset-x-auto sm:top-auto sm:bottom-24 sm:right-6 sm:h-[58vh] sm:max-h-[600px] sm:w-[380px] sm:max-w-[calc(100vw-3rem)] sm:rounded-xl sm:border sm:shadow-lg dark:border-white/10"
+          className="theme-inverse fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface shadow-[var(--shadow-float)] sm:inset-x-auto sm:top-auto sm:bottom-24 sm:right-6 sm:h-[58vh] sm:max-h-[600px] sm:w-[380px] sm:max-w-[calc(100vw-3rem)] sm:rounded-xl sm:border"
         >
-          <div className="flex shrink-0 items-center justify-between border-b border-black/10 px-4 py-3 dark:border-white/10">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">AI Shopping Assistant</h2>
             <button
               type="button"
               onClick={() => setIsOpen(false)}
               aria-label="Close assistant panel"
-              className="text-sm text-foreground/60 hover:opacity-70"
+              className="rounded-md px-2 py-1 text-sm text-muted transition-colors hover:bg-fill hover:text-foreground"
             >
               Close
             </button>
@@ -279,7 +284,7 @@ export function AiShoppingAssistant({
           <div className="flex-1 overflow-y-auto px-4 py-4">
             <ul className="flex flex-col gap-3">
               {transcript.length === 0 && (
-                <li className="text-sm text-foreground/60">
+                <li className="text-sm text-muted">
                   Ask for what you need — e.g. &quot;comfortable black office shoes under $100&quot;.
                 </li>
               )}
@@ -290,11 +295,11 @@ export function AiShoppingAssistant({
                   className={message.role === "user" ? "flex justify-end" : "flex justify-start"}
                 >
                   {message.role === "user" ? (
-                    <p className="max-w-[85%] whitespace-pre-wrap rounded-md bg-foreground px-3 py-2 text-sm text-background">
+                    <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-foreground px-3.5 py-2 text-sm text-background">
                       {message.text}
                     </p>
                   ) : (
-                    <div className="max-w-[85%] rounded-md border border-black/10 px-3 py-2 text-sm dark:border-white/10">
+                    <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-fill px-3.5 py-2 text-sm">
                       {message.kind === "ok" && (
                         <>
                           <p>{message.text}</p>
@@ -302,7 +307,7 @@ export function AiShoppingAssistant({
                               The product name shown is the authoritative
                               product.name, not assistant-invented text. */}
                           {message.recommendations.length > 0 && (
-                            <ul className="mt-2 flex flex-col gap-1 text-xs text-foreground/60">
+                            <ul className="mt-2 flex flex-col gap-1 text-xs text-muted">
                               {message.recommendations.map((rec) => (
                                 <li key={rec.product.id}>
                                   <span className="font-medium text-foreground">
@@ -316,7 +321,7 @@ export function AiShoppingAssistant({
                         </>
                       )}
                       {message.kind === "no_results" && <p>{message.text}</p>}
-                      {message.kind === "error" && <p className="text-red-600 dark:text-red-400">{message.error}</p>}
+                      {message.kind === "error" && <p className="text-danger">{message.error}</p>}
                     </div>
                   )}
                 </li>
@@ -326,7 +331,7 @@ export function AiShoppingAssistant({
                 <li className="flex justify-start">
                   <div
                     role="status"
-                    className="max-w-[85%] rounded-md border border-black/10 px-3 py-2 text-sm text-foreground/60 dark:border-white/10"
+                    className="max-w-[85%] rounded-2xl rounded-bl-md bg-fill px-3.5 py-2 text-sm text-muted"
                   >
                     <span className="sr-only">Assistant is replying</span>
                     {/* Three dots bouncing in sequence (staggered delays);
@@ -356,7 +361,7 @@ export function AiShoppingAssistant({
 
           <form
             onSubmit={handleSubmit}
-            className="flex shrink-0 items-end gap-2 border-t border-black/10 px-4 py-3 dark:border-white/10"
+            className="flex shrink-0 items-end gap-2 border-t border-border px-4 py-3"
           >
             {/* Wraps long prompts; grows with its content up to max-h-32,
                 then scrolls vertically. Enter sends through the form's own
@@ -377,12 +382,12 @@ export function AiShoppingAssistant({
               disabled={isPending}
               placeholder="e.g. comfortable black office shoes under $100"
               aria-label="Shopping request"
-              className="max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm leading-5 outline-none placeholder:truncate focus:border-foreground/50 disabled:opacity-60 dark:border-white/20"
+              className="field max-h-32 min-h-10 flex-1 resize-none overflow-y-auto py-2.5 leading-5 placeholder:truncate"
             />
             <button
               type="submit"
               disabled={isPending || inputValue.trim().length === 0}
-              className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 disabled:opacity-60"
+              className="btn btn-primary h-10"
             >
               {isPending ? "Replying…" : "Send"}
             </button>

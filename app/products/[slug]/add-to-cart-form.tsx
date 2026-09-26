@@ -18,7 +18,7 @@ export function AddToCartForm({
   const [quantity, setQuantity] = useState(1);
 
   if (maxQuantity < 1) {
-    return <p className="text-sm text-foreground/60">Out of stock.</p>;
+    return <p className="text-sm text-muted">Out of stock.</p>;
   }
 
   const canDecrease = !pending && quantity > 1;
@@ -30,20 +30,20 @@ export function AddToCartForm({
         <div
           role="group"
           aria-label="Quantity"
-          className="inline-flex w-fit items-center overflow-hidden rounded-md border border-black/15 dark:border-white/20"
+          className="inline-flex w-fit items-center overflow-hidden rounded-md border border-input bg-surface"
         >
           <button
             type="button"
             aria-label="Decrease quantity"
             disabled={!canDecrease}
             onClick={() => canDecrease && setQuantity((q) => q - 1)}
-            className="flex h-9 w-9 items-center justify-center text-sm font-medium hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-[2.125rem] w-9 items-center justify-center text-sm font-medium transition-colors hover:bg-fill disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
           >
             &minus;
           </button>
           <span
             aria-live="polite"
-            className="w-10 border-x border-black/15 py-2 text-center text-sm tabular-nums dark:border-white/20"
+            className="w-10 border-x border-input py-1.5 text-center text-sm tabular-nums"
           >
             {quantity}
           </span>
@@ -52,7 +52,7 @@ export function AddToCartForm({
             aria-label="Increase quantity"
             disabled={!canIncrease}
             onClick={() => canIncrease && setQuantity((q) => q + 1)}
-            className="flex h-9 w-9 items-center justify-center text-sm font-medium hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-[2.125rem] w-9 items-center justify-center text-sm font-medium transition-colors hover:bg-fill disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
           >
             +
           </button>
@@ -61,7 +61,7 @@ export function AddToCartForm({
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 disabled:opacity-60"
+          className="btn btn-primary"
         >
           {pending ? "Adding…" : "Add to cart"}
         </button>
@@ -69,8 +69,11 @@ export function AddToCartForm({
       {state && "error" in state && (
         <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>
       )}
+      {/* text-green-600 stays as this message's identifying class (existing
+          browser tests select `p.text-green-600`); the important
+          text-success sets the actual, contrast-safe color. */}
       {state && "success" in state && (
-        <p className="text-sm text-green-600">
+        <p className="text-sm text-green-600 text-success!">
           {state.message ?? "Added to cart."}
         </p>
       )}

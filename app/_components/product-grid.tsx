@@ -20,9 +20,9 @@ export function ProductGridSkeleton({ count = 8 }: { count?: number }) {
     >
       {Array.from({ length: count }, (_, i) => (
         <div key={i} className="flex animate-pulse flex-col gap-2">
-          <div className="aspect-square rounded-md bg-black/5 dark:bg-white/5" />
-          <div className="h-4 w-3/4 rounded bg-black/5 dark:bg-white/5" />
-          <div className="h-4 w-1/3 rounded bg-black/5 dark:bg-white/5" />
+          <div className="aspect-square rounded-md bg-fill" />
+          <div className="h-4 w-3/4 rounded bg-fill" />
+          <div className="h-4 w-1/3 rounded bg-fill" />
         </div>
       ))}
     </div>

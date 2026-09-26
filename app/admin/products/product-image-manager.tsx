@@ -108,7 +108,7 @@ export function ProductImageManager({
   }
 
   return (
-    <div className="flex max-w-2xl flex-col gap-4 rounded-md border border-black/15 p-4 dark:border-white/20">
+    <div className="card flex max-w-2xl flex-col gap-4 p-5">
       <div className="flex flex-col gap-1.5">
         <label htmlFor="product-image" className="text-sm font-medium">
           Add image
@@ -119,17 +119,17 @@ export function ProductImageManager({
           accept={ACCEPT}
           disabled={addPending}
           onChange={handleAddFile}
-          className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-background disabled:opacity-60"
+          className="text-sm file:mr-3 file:h-8 file:cursor-pointer file:rounded-md file:border-0 file:bg-foreground file:px-3 file:text-sm file:font-medium file:text-background disabled:opacity-60"
         />
-        <p className="text-xs text-foreground/60">
+        <p className="text-xs text-muted">
           JPEG, PNG, WEBP, or GIF, up to {MAX_SIZE_LABEL}.
         </p>
-        {addPending && <p className="text-sm text-foreground/60">Uploading…</p>}
+        {addPending && <p className="text-sm text-muted">Uploading…</p>}
         {addError && <p className="text-sm text-red-600 dark:text-red-400">{addError}</p>}
       </div>
 
       {images.length === 0 ? (
-        <p className="text-sm text-foreground/60">No images yet.</p>
+        <p className="text-sm text-muted">No images yet.</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {images.map((image, index) => (
@@ -256,7 +256,7 @@ function ProductImageRow({
   const busy = pending !== null;
 
   return (
-    <li className="flex gap-3 rounded-md border border-black/10 p-3 dark:border-white/10">
+    <li className="flex gap-3 card p-3">
       {/* eslint-disable-next-line @next/next/no-img-element -- S3_PUBLIC_BASE_URL
           is a runtime env value, not a static domain next/image can target. */}
       <img
@@ -273,7 +273,7 @@ function ProductImageRow({
           onBlur={handleAltTextBlur}
           disabled={busy}
           placeholder="Alt text"
-          className="rounded-md border border-black/15 bg-transparent px-2 py-1 text-sm outline-none focus:border-foreground/50 disabled:opacity-60 dark:border-white/20"
+          className="field h-8 min-h-8 px-2 py-1"
         />
 
         <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -284,7 +284,7 @@ function ProductImageRow({
               type="button"
               onClick={handleSetPrimary}
               disabled={busy}
-              className="hover:opacity-70 disabled:opacity-60"
+              className="link-action"
             >
               Set as primary
             </button>
@@ -293,7 +293,7 @@ function ProductImageRow({
             type="button"
             onClick={() => handleMove("up")}
             disabled={busy || isFirst}
-            className="hover:opacity-70 disabled:opacity-40"
+            className="link-action"
           >
             Move up
           </button>
@@ -301,11 +301,11 @@ function ProductImageRow({
             type="button"
             onClick={() => handleMove("down")}
             disabled={busy || isLast}
-            className="hover:opacity-70 disabled:opacity-40"
+            className="link-action"
           >
             Move down
           </button>
-          <label className="cursor-pointer hover:opacity-70">
+          <label className="link-action">
             Replace
             <input
               type="file"
@@ -319,13 +319,13 @@ function ProductImageRow({
             type="button"
             onClick={handleDelete}
             disabled={busy}
-            className="text-red-600 dark:text-red-400 hover:opacity-70 disabled:opacity-60"
+            className="link-action link-danger"
           >
             Delete
           </button>
         </div>
 
-        {pending && <p className="text-xs text-foreground/60">Working…</p>}
+        {pending && <p className="text-xs text-muted">Working…</p>}
         {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       </div>
     </li>

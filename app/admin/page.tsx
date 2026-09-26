@@ -17,7 +17,7 @@ export default async function AdminDashboardPage() {
         <h1 className="text-2xl font-semibold tracking-tight">
           Admin dashboard
         </h1>
-        <p className="text-sm text-foreground/60">
+        <p className="text-sm text-muted">
           Signed in as {admin.full_name?.trim() || "Admin"}.
         </p>
       </div>

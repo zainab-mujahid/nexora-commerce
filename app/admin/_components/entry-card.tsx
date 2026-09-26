@@ -12,10 +12,10 @@ export function EntryCard({
   return (
     <Link
       href={href}
-      className="flex flex-col gap-1 rounded-md border border-black/10 p-4 transition-colors hover:border-black/25 dark:border-white/10 dark:hover:border-white/25"
+      className="card card-interactive flex flex-col gap-1 rounded-md border p-5"
     >
-      <span className="text-sm font-medium">{title}</span>
-      <span className="text-sm text-foreground/60">{description}</span>
+      <span className="text-sm font-semibold">{title}</span>
+      <span className="text-sm text-muted">{description}</span>
     </Link>
   );
 }

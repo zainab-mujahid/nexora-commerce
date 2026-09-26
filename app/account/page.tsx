@@ -17,10 +17,10 @@ export default async function AccountPage() {
   const profile = await getProfile();
 
   return (
-    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-8 px-6 py-16">
+    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-8 px-4 py-12 sm:px-6">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
-        <p className="text-sm text-foreground/60">
+        <p className="text-sm text-muted">
           Manage your profile details.
         </p>
       </div>
@@ -32,17 +32,17 @@ export default async function AccountPage() {
         </p>
       ) : (
         <>
-          <dl className="flex flex-col gap-3 rounded-md border border-black/10 p-4 text-sm dark:border-white/10">
+          <dl className="flex flex-col gap-3 card p-4 text-sm">
             <div className="flex items-center justify-between gap-4">
-              <dt className="text-foreground/60">Email</dt>
+              <dt className="text-muted">Email</dt>
               <dd>{user.email ?? "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-4">
-              <dt className="text-foreground/60">Role</dt>
+              <dt className="text-muted">Role</dt>
               <dd className="capitalize">{profile.role}</dd>
             </div>
             <div className="flex items-center justify-between gap-4">
-              <dt className="text-foreground/60">Member since</dt>
+              <dt className="text-muted">Member since</dt>
               <dd>{new Date(profile.created_at).toLocaleDateString()}</dd>
             </div>
           </dl>
@@ -51,7 +51,7 @@ export default async function AccountPage() {
 
           <Link
             href="/account/addresses"
-            className="self-start text-sm underline hover:no-underline"
+            className="link-action self-start text-sm"
           >
             Manage addresses
           </Link>

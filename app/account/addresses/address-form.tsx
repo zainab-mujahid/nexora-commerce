@@ -86,11 +86,11 @@ export function AddressForm({
 
       {isLockedDefault ? (
         <div className="flex flex-col gap-1">
-          <label className="flex items-center gap-2 text-sm font-medium text-foreground/60">
+          <label className="flex items-center gap-2 text-sm font-medium text-muted">
             <input type="checkbox" checked disabled className="h-4 w-4" />
             Default address
           </label>
-          <p className="text-xs text-foreground/60">
+          <p className="text-xs text-muted">
             This is your default address. To use a different one, set
             another address as default from the addresses list.
           </p>
@@ -109,7 +109,7 @@ export function AddressForm({
             Set as default address
           </label>
           {isFirstAddress && (
-            <p className="text-xs text-foreground/60">
+            <p className="text-xs text-muted">
               Your first address is automatically set as default.
             </p>
           )}
@@ -123,7 +123,7 @@ export function AddressForm({
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+        className="btn btn-primary self-start"
       >
         {pending ? "Saving…" : "Save"}
       </button>

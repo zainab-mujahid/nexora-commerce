@@ -23,7 +23,7 @@ export default async function EditAddressPage({
   if (!address) notFound();
 
   return (
-    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-6 py-16">
+    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">Edit address</h1>
       <AddressForm address={address} />
     </main>

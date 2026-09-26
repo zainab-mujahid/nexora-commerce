@@ -15,7 +15,7 @@ export function PlacedBanner() {
   if (searchParams.get("placed") !== "1") return null;
 
   return (
-    <p className="text-sm text-foreground/60">
+    <p className="text-sm text-muted">
       Thanks for your order — we&apos;ll get it ready. This order is unpaid pending
       payment integration; no payment has been charged.
     </p>

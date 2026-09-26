@@ -93,7 +93,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       onClick={toggle}
       aria-label={label}
       title={label}
-      className={`inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-black/15 text-foreground/70 transition-colors hover:bg-black/[.04] hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground/60 dark:border-white/20 dark:hover:bg-white/[.06] ${className}`}
+      className={`btn btn-secondary size-8 shrink-0 px-0 text-muted hover:text-foreground ${className}`}
     >
       <svg
         aria-hidden="true"

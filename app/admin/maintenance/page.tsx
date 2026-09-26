@@ -89,7 +89,7 @@ export default async function AdminMaintenancePage() {
           <h2 id="search-index-heading" className="text-lg font-semibold tracking-tight">
             Product search index
           </h2>
-          <p className="text-sm text-foreground/60">
+          <p className="text-sm text-muted">
             Semantic search and the shopping assistant use each product&apos;s
             search index. Products that need attention are listed first.
           </p>
@@ -101,9 +101,9 @@ export default async function AdminMaintenancePage() {
               {counts.map((count) => (
                 <div
                   key={count.label}
-                  className="flex flex-col gap-1 rounded-md border border-black/10 p-4 dark:border-white/10"
+                  className="flex flex-col gap-1 card p-4"
                 >
-                  <dt className="text-sm text-foreground/60">{count.label}</dt>
+                  <dt className="text-sm text-muted">{count.label}</dt>
                   <dd className="text-2xl font-semibold tracking-tight">{count.value}</dd>
                 </div>
               ))}
@@ -114,7 +114,7 @@ export default async function AdminMaintenancePage() {
           </>
         ) : (
           products.length > 0 && (
-            <p className="text-sm text-foreground/60">
+            <p className="text-sm text-muted">
               Search index status is unavailable right now.
             </p>
           )
@@ -123,36 +123,34 @@ export default async function AdminMaintenancePage() {
         {products.length === 0 ? (
           <EmptyState message="No products yet." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+          <div className="table-wrap">
+            <table className="data-table">
               <thead>
-                <tr className="border-b border-black/10 text-foreground/60 dark:border-white/10">
-                  <th className="py-2 pr-4 font-medium">Name</th>
-                  <th className="py-2 pr-4 font-medium">Category</th>
-                  <th className="py-2 pr-4 font-medium">Status</th>
-                  <th className="py-2 pr-4 font-medium">Search index</th>
+                <tr>
+                  <th>Name</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                  <th>Search index</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(({ product, status }) => (
                   <tr
-                    key={product.id}
-                    className="border-b border-black/5 dark:border-white/5"
-                  >
-                    <td className="py-2 pr-4">{product.name}</td>
-                    <td className="py-2 pr-4 text-foreground/60">
+                    key={product.id}>
+                    <td className="font-medium">{product.name}</td>
+                    <td className="text-muted">
                       {product.category?.name ?? "—"}
                     </td>
-                    <td className="py-2 pr-4">
+                    <td>
                       <span
                         className={
-                          product.is_active ? "text-green-600" : "text-foreground/50"
+                          product.is_active ? "badge badge-success" : "badge"
                         }
                       >
                         {product.is_active ? "Active" : "Inactive"}
                       </span>
                     </td>
-                    <td className="py-2 pr-4">
+                    <td>
                       <SearchIndexStatus productId={product.id} status={status} />
                     </td>
                   </tr>

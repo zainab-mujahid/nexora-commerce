@@ -42,7 +42,7 @@ export default async function AdminProductsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
         <Link
           href="/admin/products/new"
-          className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90"
+          className="btn btn-primary"
         >
           New product
         </Link>
@@ -51,53 +51,51 @@ export default async function AdminProductsPage() {
       {products.length === 0 ? (
         <EmptyState message="No products yet." />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+        <div className="table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b border-black/10 text-foreground/60 dark:border-white/10">
-                <th className="py-2 pr-4 font-medium">Name</th>
-                <th className="py-2 pr-4 font-medium">Category</th>
-                <th className="py-2 pr-4 font-medium">Price</th>
-                <th className="py-2 pr-4 font-medium">Stock</th>
-                <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 pr-4 font-medium">Search index</th>
-                <th className="py-2 pr-4 font-medium" />
+              <tr>
+                <th>Name</th>
+                <th>Category</th>
+                <th>Price</th>
+                <th>Stock</th>
+                <th>Status</th>
+                <th>Search index</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {products.map((product) => (
                 <tr
-                  key={product.id}
-                  className="border-b border-black/5 dark:border-white/5"
-                >
-                  <td className="py-2 pr-4">{product.name}</td>
-                  <td className="py-2 pr-4 text-foreground/60">
+                  key={product.id}>
+                  <td className="font-medium">{product.name}</td>
+                  <td className="text-muted">
                     {product.category?.name ?? "—"}
                   </td>
-                  <td className="py-2 pr-4">{formatPrice(product.price)}</td>
-                  <td className="py-2 pr-4">{product.stock}</td>
-                  <td className="py-2 pr-4">
+                  <td>{formatPrice(product.price)}</td>
+                  <td>{product.stock}</td>
+                  <td>
                     <span
                       className={
                         product.is_active
-                          ? "text-green-600"
-                          : "text-foreground/50"
+                          ? "badge badge-success"
+                          : "badge"
                       }
                     >
                       {product.is_active ? "Active" : "Inactive"}
                     </span>
                   </td>
-                  <td className="py-2 pr-4">
+                  <td>
                     <SearchIndexStatus
                       productId={product.id}
                       status={searchIndex.get(product.id) ?? "unavailable"}
                     />
                   </td>
-                  <td className="py-2 pr-4">
+                  <td>
                     <div className="flex gap-3">
                       <Link
                         href={`/admin/products/${product.id}`}
-                        className="hover:opacity-70"
+                        className="link-action"
                       >
                         Edit
                       </Link>

@@ -17,23 +17,23 @@ export type SearchIndexDisplayStatus = ProductEmbeddingStatus | "unavailable";
 const BADGE: Record<SearchIndexDisplayStatus, { label: string; className: string }> = {
   up_to_date: {
     label: "Up to date",
-    className: "border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400",
+    className: "badge-success",
   },
   missing: {
     label: "Missing",
-    className: "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    className: "badge-warning",
   },
   out_of_date: {
     label: "Out of date",
-    className: "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    className: "badge-warning",
   },
   repair_failed: {
     label: "Repair failed",
-    className: "border-red-600/30 bg-red-600/10 text-red-700 dark:text-red-400",
+    className: "badge-danger",
   },
   unavailable: {
     label: "Unavailable",
-    className: "border-black/15 text-foreground/60 dark:border-white/20",
+    className: "",
   },
 };
 
@@ -44,11 +44,11 @@ const ACTION: Partial<Record<SearchIndexDisplayStatus, string>> = {
 };
 
 const FEEDBACK_CLASS: Record<RepairProductEmbeddingResult["status"], string> = {
-  repaired: "text-green-700 dark:text-green-400",
-  already_current: "text-foreground/60",
-  failed: "text-red-600 dark:text-red-400",
-  superseded: "text-foreground/60",
-  not_found: "text-foreground/60",
+  repaired: "text-success",
+  already_current: "text-muted",
+  failed: "text-danger",
+  superseded: "text-muted",
+  not_found: "text-muted",
 };
 
 // One product's search-index status in the admin list, with a repair button
@@ -94,7 +94,7 @@ export function SearchIndexStatus({
     <div className="flex flex-col items-start gap-1">
       <div className="flex items-center gap-2">
         <span
-          className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`}
+          className={`badge ${badge.className}`}
         >
           {badge.label}
         </span>
@@ -103,7 +103,7 @@ export function SearchIndexStatus({
             type="button"
             onClick={repair}
             disabled={pending}
-            className="whitespace-nowrap text-xs font-medium underline-offset-2 hover:underline disabled:opacity-60 disabled:no-underline"
+            className="link-action whitespace-nowrap text-xs"
           >
             {pending ? "Updating…" : action}
           </button>

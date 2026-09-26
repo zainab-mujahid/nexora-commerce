@@ -2,19 +2,12 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { EmptyState } from "@/app/_components/empty-state";
+import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { formatPrice } from "@/lib/catalog/format";
 import { getAdminOrders } from "@/lib/orders/queries";
 
 export const metadata: Metadata = {
   title: "Orders",
-};
-
-const STATUS_STYLES: Record<string, string> = {
-  pending: "bg-foreground/10 text-foreground/70",
-  processing: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400",
-  shipped: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
-  delivered: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400",
-  cancelled: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400",
 };
 
 export default async function AdminOrdersPage() {
@@ -27,43 +20,41 @@ export default async function AdminOrdersPage() {
       {orders.length === 0 ? (
         <EmptyState message="No orders yet." />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+        <div className="table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b border-black/10 text-foreground/60 dark:border-white/10">
-                <th className="py-2 pr-4 font-medium">Order</th>
-                <th className="py-2 pr-4 font-medium">Customer</th>
-                <th className="py-2 pr-4 font-medium">Date</th>
-                <th className="py-2 pr-4 font-medium">Items</th>
-                <th className="py-2 pr-4 font-medium">Total</th>
-                <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 pr-4 font-medium" />
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Date</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {orders.map((order) => (
                 <tr
-                  key={order.id}
-                  className="border-b border-black/5 dark:border-white/5"
-                >
-                  <td className="py-2 pr-4 font-mono text-xs text-foreground/60">
+                  key={order.id}>
+                  <td className="font-mono text-xs text-muted">
                     {order.id.slice(0, 8)}
                   </td>
-                  <td className="py-2 pr-4">{order.customerName}</td>
-                  <td className="py-2 pr-4 text-foreground/60">
+                  <td>{order.customerName}</td>
+                  <td className="text-muted">
                     {new Date(order.created_at).toLocaleDateString()}
                   </td>
-                  <td className="py-2 pr-4">{order.itemCount}</td>
-                  <td className="py-2 pr-4">{formatPrice(order.total)}</td>
-                  <td className="py-2 pr-4">
+                  <td>{order.itemCount}</td>
+                  <td>{formatPrice(order.total)}</td>
+                  <td>
                     <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium capitalize ${STATUS_STYLES[order.status] ?? ""}`}
+                      className={`capitalize ${orderStatusBadgeClass(order.status)}`}
                     >
                       {order.status}
                     </span>
                   </td>
-                  <td className="py-2 pr-4">
-                    <Link href={`/admin/orders/${order.id}`} className="hover:opacity-70">
+                  <td>
+                    <Link href={`/admin/orders/${order.id}`} className="link-action">
                       View
                     </Link>
                   </td>

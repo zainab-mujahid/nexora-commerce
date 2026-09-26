@@ -18,7 +18,7 @@ export function WishlistButton({
   if (wishlistItemId) {
     return (
       <form action={removeWishlistItem.bind(null, wishlistItemId)}>
-        <button type="submit" className="text-sm underline hover:no-underline">
+        <button type="submit" className="btn btn-secondary">
           Remove from wishlist
         </button>
       </form>
@@ -40,7 +40,7 @@ function AddToWishlistForm({ productId }: { productId: string }) {
         <button
           type="submit"
           disabled={pending}
-          className="text-sm underline hover:no-underline disabled:opacity-60"
+          className="btn btn-secondary"
         >
           {pending ? "Saving…" : "Add to wishlist"}
         </button>

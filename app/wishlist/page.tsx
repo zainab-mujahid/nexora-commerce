@@ -43,7 +43,7 @@ export default async function WishlistPage() {
               return (
                 <li
                   key={item.id}
-                  className="flex gap-4 rounded-md border border-black/10 p-4 opacity-70 dark:border-white/10"
+                  className="flex gap-4 card p-4 opacity-70"
                 >
                   <ProductImageDisplay
                     images={label?.images ?? []}
@@ -64,7 +64,7 @@ export default async function WishlistPage() {
             return (
               <li
                 key={item.id}
-                className="flex gap-4 rounded-md border border-black/10 p-4 dark:border-white/10"
+                className="flex gap-4 card p-4"
               >
                 <ProductImageDisplay
                   images={item.product.images}
@@ -76,11 +76,11 @@ export default async function WishlistPage() {
                   <div>
                     <Link
                       href={`/products/${item.product.slug}`}
-                      className="font-medium hover:opacity-70"
+                      className="font-medium underline-offset-4 hover:underline"
                     >
                       {item.product.name}
                     </Link>
-                    <p className="text-sm text-foreground/60">
+                    <p className="text-sm text-muted">
                       {formatPrice(item.product.price)}
                     </p>
                   </div>

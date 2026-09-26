@@ -19,9 +19,9 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6">
-      <nav className="flex flex-wrap gap-4 border-b border-black/10 pb-3 text-sm font-medium dark:border-white/10">
+      <nav className="relative -ml-2.5 flex flex-wrap gap-1 pb-3 text-sm font-medium after:absolute after:bottom-0 after:left-2.5 after:right-0 after:h-px after:bg-border">
         {ADMIN_NAV.map((item) => (
-          <Link key={item.href} href={item.href} className="hover:opacity-70">
+          <Link key={item.href} href={item.href} className="nav-link rounded-md px-2.5 py-1.5 hover:bg-fill">
             {item.label}
           </Link>
         ))}

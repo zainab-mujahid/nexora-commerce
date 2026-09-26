@@ -86,13 +86,13 @@ export function SlugField({
           spellCheck={false}
           aria-invalid={errors ? true : undefined}
           aria-describedby={describedBy || undefined}
-          className="w-full rounded-md border border-black/15 bg-transparent py-2 pl-3 pr-9 text-sm outline-none focus:border-foreground/50 aria-invalid:border-red-500 dark:border-white/20"
+          className="field w-full pr-9"
         />
         <button
           type="button"
           onClick={editFromPencil}
           aria-label="Edit slug"
-          className="group absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-md text-foreground/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground/40"
+          className="group absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-md text-subtle hover:text-foreground focus-visible:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground/40"
         >
           <svg
             aria-hidden="true"
@@ -118,7 +118,7 @@ export function SlugField({
         </button>
       </div>
       {hint && (
-        <p id="slug-hint" className="text-xs text-foreground/60">
+        <p id="slug-hint" className="text-xs text-muted">
           {hint}
         </p>
       )}

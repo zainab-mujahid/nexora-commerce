@@ -21,7 +21,7 @@ export function AccountForm({ defaultFullName }: { defaultFullName: string }) {
       {state?.message && (
         <p
           className={
-            state.success ? "text-sm text-green-600" : "text-sm text-red-600 dark:text-red-400"
+            state.success ? "text-sm text-success" : "text-sm text-red-600 dark:text-red-400"
           }
         >
           {state.message}
@@ -31,7 +31,7 @@ export function AccountForm({ defaultFullName }: { defaultFullName: string }) {
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+        className="btn btn-primary self-start"
       >
         {pending ? "Saving…" : "Save changes"}
       </button>
