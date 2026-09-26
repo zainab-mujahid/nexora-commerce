@@ -31,7 +31,7 @@ export function LoginForm({ next }: { next?: string }) {
       />
 
       {state?.message && (
-        <p className="text-sm text-red-600">{state.message}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>
       )}
 
       <button

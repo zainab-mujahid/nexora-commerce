@@ -131,7 +131,7 @@ export function CheckoutForm({
                   <p className="font-medium">
                     {item.unavailableProduct?.name ?? "Unavailable item"}
                   </p>
-                  <p className="text-red-600">No longer available.</p>
+                  <p className="text-red-600 dark:text-red-400">No longer available.</p>
                 </div>
               </li>
             ),
@@ -154,7 +154,7 @@ export function CheckoutForm({
         </div>
       </section>
 
-      {state?.error && <p className="text-sm text-red-600">{state.error}</p>}
+      {state?.error && <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>}
 
       <button
         type="submit"

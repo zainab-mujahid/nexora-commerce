@@ -26,7 +26,7 @@ export default async function AccountPage() {
       </div>
 
       {!profile ? (
-        <p className="rounded-md border border-red-500/40 p-4 text-sm text-red-600">
+        <p className="rounded-md border border-red-500/40 p-4 text-sm text-red-600 dark:text-red-400">
           We couldn&apos;t load your profile right now. Try refreshing the
           page.
         </p>

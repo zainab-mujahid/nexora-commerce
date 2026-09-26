@@ -21,7 +21,7 @@ export function AccountForm({ defaultFullName }: { defaultFullName: string }) {
       {state?.message && (
         <p
           className={
-            state.success ? "text-sm text-green-600" : "text-sm text-red-600"
+            state.success ? "text-sm text-green-600" : "text-sm text-red-600 dark:text-red-400"
           }
         >
           {state.message}

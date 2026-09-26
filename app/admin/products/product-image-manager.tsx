@@ -125,7 +125,7 @@ export function ProductImageManager({
           JPEG, PNG, WEBP, or GIF, up to {MAX_SIZE_LABEL}.
         </p>
         {addPending && <p className="text-sm text-foreground/60">Uploading…</p>}
-        {addError && <p className="text-sm text-red-600">{addError}</p>}
+        {addError && <p className="text-sm text-red-600 dark:text-red-400">{addError}</p>}
       </div>
 
       {images.length === 0 ? (
@@ -319,14 +319,14 @@ function ProductImageRow({
             type="button"
             onClick={handleDelete}
             disabled={busy}
-            className="text-red-600 hover:opacity-70 disabled:opacity-60"
+            className="text-red-600 dark:text-red-400 hover:opacity-70 disabled:opacity-60"
           >
             Delete
           </button>
         </div>
 
         {pending && <p className="text-xs text-foreground/60">Working…</p>}
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       </div>
     </li>
   );

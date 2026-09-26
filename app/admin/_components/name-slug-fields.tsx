@@ -36,7 +36,7 @@ export function NameSlugFields({
           className="rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm outline-none focus:border-foreground/50 aria-invalid:border-red-500 dark:border-white/20"
         />
         {errors?.name && (
-          <ul id="name-error" className="text-xs text-red-600">
+          <ul id="name-error" className="text-xs text-red-600 dark:text-red-400">
             {errors.name.map((error) => (
               <li key={error}>{error}</li>
             ))}

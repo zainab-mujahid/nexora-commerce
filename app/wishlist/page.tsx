@@ -52,7 +52,7 @@ export default async function WishlistPage() {
                   />
                   <div className="flex flex-1 flex-col gap-2">
                     <p className="font-medium">{label?.name ?? "Unavailable item"}</p>
-                    <p className="text-sm text-red-600">No longer available.</p>
+                    <p className="text-sm text-red-600 dark:text-red-400">No longer available.</p>
                     <RemoveWishlistItemButton wishlistItemId={item.id} />
                   </div>
                 </li>
@@ -86,7 +86,7 @@ export default async function WishlistPage() {
                   </div>
 
                   {isUnavailable ? (
-                    <p className="text-sm text-red-600">
+                    <p className="text-sm text-red-600 dark:text-red-400">
                       {item.product.is_active
                         ? "Out of stock."
                         : "No longer available."}

@@ -5,6 +5,7 @@ import { getProfile, getUser, type Profile } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
 
 import { ProductSearchInput } from "./product-search-input";
+import { ThemeToggle } from "./theme-toggle";
 
 type AuthUser = Awaited<ReturnType<typeof getUser>>;
 
@@ -56,11 +57,16 @@ export async function SiteHeader() {
           <AuthLinks user={user} profile={profile} />
         </div>
 
-        <details className="group ml-auto sm:hidden">
+        {/* One toggle for every breakpoint: right after the account links on
+            desktop, and on mobile pushed right beside the Menu button (not
+            inside it) so it stays one tap away. */}
+        <ThemeToggle className="ml-auto sm:ml-0" />
+
+        <details className="group sm:hidden">
           <summary className="flex cursor-pointer list-none select-none items-center rounded-md border border-black/15 px-2 py-1 text-sm dark:border-white/20">
             Menu
           </summary>
-          <div className="absolute inset-x-0 top-full z-20 flex flex-col gap-4 border-b border-black/10 bg-background px-4 py-4 text-sm font-medium dark:border-white/10">
+          <div className="absolute inset-x-0 top-full z-20 flex flex-col gap-4 border-b border-black/10 bg-surface px-4 py-4 text-sm font-medium dark:border-white/10">
             <Link href="/">Home</Link>
             <Link href="/products">Shop</Link>
             {categories.length > 0 && (
@@ -99,7 +105,7 @@ function CategoriesMenu({ categories }: { categories: NavCategory[] }) {
       <div className="pointer-events-none absolute left-0 top-full z-20 pt-2 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100">
         <ul
           aria-label="Categories"
-          className="flex min-w-44 flex-col rounded-md border border-black/10 bg-background py-1 shadow-lg dark:border-white/10"
+          className="flex min-w-44 flex-col rounded-md border border-black/10 bg-surface py-1 shadow-lg dark:border-white/10"
         >
           {categories.map((category) => (
             <li key={category.slug}>

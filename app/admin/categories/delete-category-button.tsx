@@ -16,7 +16,7 @@ export function DeleteCategoryButton({ categoryId }: { categoryId: string }) {
         }
       }}
     >
-      <button type="submit" className="text-red-600 hover:opacity-70">
+      <button type="submit" className="text-red-600 dark:text-red-400 hover:opacity-70">
         Delete
       </button>
     </form>

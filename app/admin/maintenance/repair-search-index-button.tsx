@@ -46,7 +46,7 @@ export function RepairSearchIndexButton({ needsAttention }: { needsAttention: nu
   const feedbackClass = !result
     ? ""
     : result.status === "completed" && result.failed > 0
-      ? "text-red-600"
+      ? "text-red-600 dark:text-red-400"
       : result.status === "completed" &&
           result.stoppedReason === "complete" &&
           result.superseded === 0 &&

@@ -46,7 +46,7 @@ function AddToWishlistForm({ productId }: { productId: string }) {
         </button>
       </form>
       {state && "error" in state && (
-        <p className="text-xs text-red-600">{state.error}</p>
+        <p className="text-xs text-red-600 dark:text-red-400">{state.error}</p>
       )}
     </div>
   );

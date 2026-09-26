@@ -67,7 +67,7 @@ export function AddToCartForm({
         </button>
       </div>
       {state && "error" in state && (
-        <p className="text-sm text-red-600">{state.error}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>
       )}
       {state && "success" in state && (
         <p className="text-sm text-green-600">

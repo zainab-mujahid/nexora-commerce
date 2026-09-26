@@ -40,7 +40,7 @@ export function UpdateQuantityForm({
         </button>
       </form>
       {state && "error" in state && (
-        <p className="text-xs text-red-600">{state.error}</p>
+        <p className="text-xs text-red-600 dark:text-red-400">{state.error}</p>
       )}
       {state && "success" in state && state.message && (
         <p className="text-xs text-foreground/60">{state.message}</p>

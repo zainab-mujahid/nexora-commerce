@@ -123,7 +123,7 @@ export function SlugField({
         </p>
       )}
       {errors && (
-        <ul id="slug-error" className="text-xs text-red-600">
+        <ul id="slug-error" className="text-xs text-red-600 dark:text-red-400">
           {errors.map((error) => (
             <li key={error}>{error}</li>
           ))}

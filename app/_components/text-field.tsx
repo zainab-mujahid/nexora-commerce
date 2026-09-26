@@ -46,7 +46,7 @@ export function TextField({
         <p className="text-xs text-foreground/60">{hint}</p>
       )}
       {errors && (
-        <ul id={`${name}-error`} className="text-xs text-red-600">
+        <ul id={`${name}-error`} className="text-xs text-red-600 dark:text-red-400">
           {errors.map((error) => (
             <li key={error}>{error}</li>
           ))}

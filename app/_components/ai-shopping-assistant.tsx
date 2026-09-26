@@ -262,7 +262,7 @@ export function AiShoppingAssistant({
           // right-side drawer — sm:inset-x-auto/sm:top-auto undo the
           // mobile inset-x-0/bottom-0 positioning so the explicit
           // bottom/right/width/height values below take over.
-          className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden border-t border-black/10 bg-background sm:inset-x-auto sm:top-auto sm:bottom-24 sm:right-6 sm:h-[58vh] sm:max-h-[600px] sm:w-[380px] sm:max-w-[calc(100vw-3rem)] sm:rounded-xl sm:border sm:shadow-lg dark:border-white/10 dark:bg-background"
+          className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden border-t border-black/10 bg-surface sm:inset-x-auto sm:top-auto sm:bottom-24 sm:right-6 sm:h-[58vh] sm:max-h-[600px] sm:w-[380px] sm:max-w-[calc(100vw-3rem)] sm:rounded-xl sm:border sm:shadow-lg dark:border-white/10"
         >
           <div className="flex shrink-0 items-center justify-between border-b border-black/10 px-4 py-3 dark:border-white/10">
             <h2 className="text-sm font-semibold">AI Shopping Assistant</h2>
@@ -316,7 +316,7 @@ export function AiShoppingAssistant({
                         </>
                       )}
                       {message.kind === "no_results" && <p>{message.text}</p>}
-                      {message.kind === "error" && <p className="text-red-600">{message.error}</p>}
+                      {message.kind === "error" && <p className="text-red-600 dark:text-red-400">{message.error}</p>}
                     </div>
                   )}
                 </li>

@@ -46,7 +46,7 @@ const ACTION: Partial<Record<SearchIndexDisplayStatus, string>> = {
 const FEEDBACK_CLASS: Record<RepairProductEmbeddingResult["status"], string> = {
   repaired: "text-green-700 dark:text-green-400",
   already_current: "text-foreground/60",
-  failed: "text-red-600",
+  failed: "text-red-600 dark:text-red-400",
   superseded: "text-foreground/60",
   not_found: "text-foreground/60",
 };

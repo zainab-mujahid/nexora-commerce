@@ -4,6 +4,7 @@ import "./globals.css";
 
 import { SiteFooter } from "./_components/site-footer";
 import { SiteHeader } from "./_components/site-header";
+import { THEME_INIT_SCRIPT } from "./_components/theme";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,10 +26,17 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
+    // suppressHydrationWarning: THEME_INIT_SCRIPT adds data-theme to <html>
+    // before React hydrates, which React would otherwise report as a
+    // mismatch. It only applies to <html>'s own attributes, not its subtree.
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="flex min-h-full flex-col">
         <SiteHeader />
         {children}

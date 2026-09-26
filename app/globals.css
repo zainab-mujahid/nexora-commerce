@@ -1,22 +1,41 @@
 @import "tailwindcss";
 
+/*
+ * Theme: <html data-theme="light|dark">, set before first paint by the
+ * inline script in app/layout.tsx (stored choice, else the OS preference)
+ * and switched by <ThemeToggle>. Every `dark:` utility keys off the same
+ * attribute, so the tokens below and the existing dark: classes can never
+ * disagree.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Light: white page, near-black text with a cool undertone. */
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #11141a;
+  /* Elevated overlays (menus, dropdowns, the assistant panel). */
+  --surface: #ffffff;
+  color-scheme: light;
+}
+
+/*
+ * Dark: a deep blue-gray page rather than pure black, a lighter surface for
+ * anything that floats above it, and off-white text so the existing
+ * foreground/60, /70 opacity steps stay comfortably readable.
+ */
+[data-theme="dark"] {
+  --background: #0f1217;
+  --foreground: #e6e8ec;
+  --surface: #181c23;
+  color-scheme: dark;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {

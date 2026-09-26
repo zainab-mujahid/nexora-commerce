@@ -37,7 +37,7 @@ export function CategoryForm({ category }: { category?: Category }) {
           className="rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm outline-none focus:border-foreground/50 dark:border-white/20"
         />
         {state?.errors?.description && (
-          <ul className="text-xs text-red-600">
+          <ul className="text-xs text-red-600 dark:text-red-400">
             {state.errors.description.map((error) => (
               <li key={error}>{error}</li>
             ))}
@@ -46,7 +46,7 @@ export function CategoryForm({ category }: { category?: Category }) {
       </div>
 
       {state?.message && (
-        <p className="text-sm text-red-600">{state.message}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>
       )}
 
       <button

@@ -12,7 +12,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   return (
     <div className="flex flex-col gap-4">
       {error === "invalid_link" && (
-        <p className="rounded-md border border-red-500/40 p-3 text-sm text-red-600">
+        <p className="rounded-md border border-red-500/40 p-3 text-sm text-red-600 dark:text-red-400">
           That confirmation link is invalid or has expired. Sign in to request a
           new one.
         </p>
