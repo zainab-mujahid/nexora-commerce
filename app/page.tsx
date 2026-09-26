@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { AiShoppingAssistant } from "@/app/_components/ai-shopping-assistant";
+import { CategoryGrid } from "@/app/_components/category-card";
 import {
   FeaturedProducts,
   FeaturedProductsSkeleton,
@@ -9,6 +10,10 @@ import {
 import { getProfile, getUser } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
 import type { Category } from "@/lib/catalog/types";
+
+// One desktop row of the category grid. More than this links to the full
+// /categories index instead of making the homepage grow with the catalog.
+const HOME_CATEGORY_LIMIT = 4;
 
 // Same cached getCategories() the header already calls for every page (so
 // no extra query); like the header, a failure only hides the category row.
@@ -61,36 +66,17 @@ export default async function Home() {
           aria-labelledby="home-categories-heading"
           className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 pt-12 sm:px-6 sm:pt-16"
         >
-          <div className="border-b border-border pb-4">
+          <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
             <h2 id="home-categories-heading" className="text-xl font-semibold tracking-tight sm:text-2xl">
               Shop by category
             </h2>
+            {categories.length > HOME_CATEGORY_LIMIT && (
+              <Link href="/categories" className="link-action shrink-0 text-sm">
+                View all <span aria-hidden="true">&rarr;</span>
+              </Link>
+            )}
           </div>
-          <ul className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-            {categories.map((category) => (
-              <li key={category.id}>
-                <Link
-                  href={`/categories/${category.slug}`}
-                  className="group flex h-full flex-col justify-between gap-6 rounded-lg border border-border bg-surface p-4 shadow-[var(--shadow-card)] transition-colors hover:border-input sm:p-5"
-                >
-                  <span className="flex flex-col gap-1">
-                    <span className="font-semibold tracking-tight">{category.name}</span>
-                    {category.description && (
-                      <span className="line-clamp-2 text-sm text-muted">{category.description}</span>
-                    )}
-                  </span>
-                  <span
-                    aria-hidden="true"
-                    className="flex size-8 items-center justify-center self-end rounded-full bg-fill text-muted transition-colors group-hover:bg-foreground group-hover:text-background"
-                  >
-                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="size-4">
-                      <path d="M4 10h12m-5-5 5 5-5 5" />
-                    </svg>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <CategoryGrid categories={categories.slice(0, HOME_CATEGORY_LIMIT)} />
         </section>
       )}
 
