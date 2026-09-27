@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
+import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import { getCategoryById } from "@/lib/catalog/categories";
 
 import { CategoryForm } from "../category-form";
@@ -24,7 +25,7 @@ export default async function EditCategoryPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Edit category</h1>
+      <AdminPageHeader back={{ href: "/admin/categories", label: "Categories" }} description={category.name}>Edit category</AdminPageHeader>
       <CategoryForm category={category} />
     </div>
   );

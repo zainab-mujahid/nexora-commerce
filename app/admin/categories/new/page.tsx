@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
+
 import { CategoryForm } from "../category-form";
 
 export const metadata: Metadata = {
@@ -9,7 +11,7 @@ export const metadata: Metadata = {
 export default function NewCategoryPage() {
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">New category</h1>
+      <AdminPageHeader back={{ href: "/admin/categories", label: "Categories" }}>New category</AdminPageHeader>
       <CategoryForm />
     </div>
   );

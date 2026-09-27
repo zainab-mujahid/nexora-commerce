@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { EmptyState } from "@/app/_components/empty-state";
+import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import {
   getProductEmbeddingStatuses,
   summarizeProductEmbeddingStatuses,
@@ -42,6 +43,16 @@ async function loadSearchIndex(productIds: string[]): Promise<{
   }
 }
 
+// Presentation only: the dot colour next to each summary label (the label
+// text itself stays the status name, so colour is never the only cue).
+const COUNT_TONE: Record<string, string> = {
+  "Up to date": "bg-success",
+  Missing: "bg-warning",
+  "Out of date": "bg-warning",
+  "Repair failed": "bg-danger",
+  Unavailable: "bg-subtle",
+};
+
 // Display order only (the statuses themselves come from Phase C): products
 // needing attention first, then ones whose status couldn't be determined,
 // then up to date.
@@ -82,7 +93,7 @@ export default async function AdminMaintenancePage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Maintenance</h1>
+      <AdminPageHeader>Maintenance</AdminPageHeader>
 
       <section aria-labelledby="search-index-heading" className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
@@ -97,20 +108,25 @@ export default async function AdminMaintenancePage() {
 
         {health ? (
           <>
-            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
               {counts.map((count) => (
                 <div
                   key={count.label}
-                  className="flex flex-col gap-1 card p-4"
+                  className="flex flex-col gap-2 card p-4"
                 >
-                  <dt className="text-sm text-muted">{count.label}</dt>
-                  <dd className="text-2xl font-semibold tracking-tight">{count.value}</dd>
+                  <dt className="flex items-center gap-2 text-sm text-muted">
+                    <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${COUNT_TONE[count.label] ?? "bg-subtle"}`} />
+                    {count.label}
+                  </dt>
+                  <dd className={`text-2xl font-semibold tracking-tight tabular-nums ${count.value === 0 ? "text-muted" : ""}`}>{count.value}</dd>
                 </div>
               ))}
             </dl>
             {/* Offered only when the canonical status summary is known; it
                 is disabled when nothing needs repair. */}
-            <RepairSearchIndexButton needsAttention={health.needsAttention} />
+            <div className="rounded-md border border-border bg-fill/40 p-4">
+              <RepairSearchIndexButton needsAttention={health.needsAttention} />
+            </div>
           </>
         ) : (
           products.length > 0 && (
@@ -124,7 +140,7 @@ export default async function AdminMaintenancePage() {
           <EmptyState message="No products yet." />
         ) : (
           <div className="table-wrap">
-            <table className="data-table">
+            <table className="data-table data-table-stack">
               <thead>
                 <tr>
                   <th>Name</th>
@@ -138,10 +154,10 @@ export default async function AdminMaintenancePage() {
                   <tr
                     key={product.id}>
                     <td className="font-medium">{product.name}</td>
-                    <td className="text-muted">
+                    <td data-label="Category" className="text-muted">
                       {product.category?.name ?? "—"}
                     </td>
-                    <td>
+                    <td data-label="Status">
                       <span
                         className={
                           product.is_active ? "badge badge-success" : "badge"
@@ -150,7 +166,7 @@ export default async function AdminMaintenancePage() {
                         {product.is_active ? "Active" : "Inactive"}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Search index">
                       <SearchIndexStatus productId={product.id} status={status} />
                     </td>
                   </tr>

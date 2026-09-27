@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { EmptyState } from "@/app/_components/empty-state";
+import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import { getProductEmbeddingStatuses } from "@/lib/ai/product-embedding-status";
 import { formatPrice } from "@/lib/catalog/format";
 import { getAdminProducts } from "@/lib/catalog/products";
@@ -38,27 +39,28 @@ export default async function AdminProductsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
-        <Link
-          href="/admin/products/new"
-          className="btn btn-primary"
-        >
-          New product
-        </Link>
-      </div>
+      <AdminPageHeader
+        description={`${products.length} product${products.length === 1 ? "" : "s"}`}
+        action={
+          <Link href="/admin/products/new" className="btn btn-primary">
+            New product
+          </Link>
+        }
+      >
+        Products
+      </AdminPageHeader>
 
       {products.length === 0 ? (
         <EmptyState message="No products yet." />
       ) : (
         <div className="table-wrap">
-          <table className="data-table">
+          <table className="data-table data-table-stack">
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Category</th>
-                <th>Price</th>
-                <th>Stock</th>
+                <th className="cell-num">Price</th>
+                <th className="cell-num">Stock</th>
                 <th>Status</th>
                 <th>Search index</th>
                 <th />
@@ -69,12 +71,12 @@ export default async function AdminProductsPage() {
                 <tr
                   key={product.id}>
                   <td className="font-medium">{product.name}</td>
-                  <td className="text-muted">
+                  <td data-label="Category" className="text-muted">
                     {product.category?.name ?? "—"}
                   </td>
-                  <td>{formatPrice(product.price)}</td>
-                  <td>{product.stock}</td>
-                  <td>
+                  <td data-label="Price" className="cell-num">{formatPrice(product.price)}</td>
+                  <td data-label="Stock" className={`cell-num ${product.stock <= 0 ? "font-medium text-danger" : ""}`}>{product.stock}</td>
+                  <td data-label="Status">
                     <span
                       className={
                         product.is_active
@@ -85,14 +87,14 @@ export default async function AdminProductsPage() {
                       {product.is_active ? "Active" : "Inactive"}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Search index">
                     <SearchIndexStatus
                       productId={product.id}
                       status={searchIndex.get(product.id) ?? "unavailable"}
                     />
                   </td>
-                  <td>
-                    <div className="flex gap-3">
+                  <td className="cell-actions">
+                    <div className="flex justify-end gap-4 whitespace-nowrap">
                       <Link
                         href={`/admin/products/${product.id}`}
                         className="link-action"

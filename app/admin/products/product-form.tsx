@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 
 import { TextField } from "@/app/_components/text-field";
@@ -24,7 +25,7 @@ export function ProductForm({
     <form
       action={formAction}
       onSubmit={submitWithoutReset(formAction)}
-      className="flex max-w-lg flex-col gap-4"
+      className="card flex flex-col gap-5 p-5 sm:p-6"
     >
       <NameSlugFields
         initialName={product?.name}
@@ -101,7 +102,7 @@ export function ProductForm({
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-sm font-medium">
+      <label className="flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface px-3 py-2.5 text-sm font-medium transition-colors hover:border-input">
         <input
           type="checkbox"
           name="isActive"
@@ -116,13 +117,18 @@ export function ProductForm({
         <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>
       )}
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="btn btn-primary self-start"
-      >
-        {pending ? "Saving…" : "Save"}
-      </button>
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
+        <button
+          type="submit"
+          disabled={pending}
+          className="btn btn-primary"
+        >
+          {pending ? "Saving…" : "Save"}
+        </button>
+        <Link href="/admin/products" className="btn btn-secondary">
+          Cancel
+        </Link>
+      </div>
     </form>
   );
 }

@@ -1,6 +1,6 @@
-import Link from "next/link";
-
 import { requireAdmin } from "@/lib/auth/dal";
+
+import { AdminNavLink } from "./_components/admin-nav";
 
 const ADMIN_NAV = [
   { href: "/admin", label: "Dashboard" },
@@ -18,13 +18,19 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
   await requireAdmin();
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6">
-      <nav className="relative -ml-2.5 flex flex-wrap gap-1 pb-3 text-sm font-medium after:absolute after:bottom-0 after:left-2.5 after:right-0 after:h-px after:bg-border">
-        {ADMIN_NAV.map((item) => (
-          <Link key={item.href} href={item.href} className="nav-link rounded-md px-2.5 py-1.5 hover:bg-fill">
-            {item.label}
-          </Link>
-        ))}
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-8">
+      {/* Section tabs; scrolls sideways on narrow screens instead of wrapping.
+          The bottom rule is an inset shadow (not a border) so the active
+          tab's underline can sit on it without overflowing the nav and
+          triggering a vertical scrollbar. */}
+      <nav aria-label="Admin" className="-mx-4 overflow-x-auto overflow-y-hidden px-4 shadow-[inset_0_-1px_0_var(--border)] sm:mx-0 sm:px-0">
+        <ul className="flex w-max gap-6">
+          {ADMIN_NAV.map((item) => (
+            <li key={item.href}>
+              <AdminNavLink href={item.href}>{item.label}</AdminNavLink>
+            </li>
+          ))}
+        </ul>
       </nav>
       {children}
     </main>

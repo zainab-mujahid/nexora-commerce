@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import { getCategories } from "@/lib/catalog/categories";
 
 import { ProductForm } from "../product-form";
@@ -13,8 +14,10 @@ export default async function NewProductPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">New product</h1>
-      <ProductForm categories={categories} />
+      <AdminPageHeader back={{ href: "/admin/products", label: "Products" }}>New product</AdminPageHeader>
+      <div className="max-w-2xl">
+        <ProductForm categories={categories} />
+      </div>
     </div>
   );
 }

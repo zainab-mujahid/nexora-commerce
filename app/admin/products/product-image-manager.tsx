@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type ChangeEvent } from "react";
 
+import { ProductImageFrame } from "@/app/_components/product-image-frame";
 import {
   confirmProductImageReplace,
   confirmProductImageUpload,
@@ -108,7 +109,7 @@ export function ProductImageManager({
   }
 
   return (
-    <div className="card flex max-w-2xl flex-col gap-4 p-5">
+    <div className="card flex flex-col gap-5 p-5 sm:p-6">
       <div className="flex flex-col gap-1.5">
         <label htmlFor="product-image" className="text-sm font-medium">
           Add image
@@ -129,7 +130,7 @@ export function ProductImageManager({
       </div>
 
       {images.length === 0 ? (
-        <p className="text-sm text-muted">No images yet.</p>
+        <p className="empty-state px-4 py-6 text-center text-sm text-muted">No images yet.</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {images.map((image, index) => (
@@ -256,13 +257,14 @@ function ProductImageRow({
   const busy = pending !== null;
 
   return (
-    <li className="flex gap-3 card p-3">
-      {/* eslint-disable-next-line @next/next/no-img-element -- S3_PUBLIC_BASE_URL
-          is a runtime env value, not a static domain next/image can target. */}
-      <img
-        src={image.url}
+    <li className="flex gap-4 rounded-md border border-border p-3">
+      {/* Shared storefront frame: a failed image fades to a placeholder
+          instead of the browser's broken-image icon (the <img> stays in the
+          DOM). Display only — upload/ordering/deletion are unchanged. */}
+      <ProductImageFrame
+        image={image}
         alt={image.alt_text ?? ""}
-        className="h-20 w-20 shrink-0 rounded-md object-cover"
+        className="size-20 shrink-0 rounded-md ring-1 ring-inset ring-border"
       />
 
       <div className="flex flex-1 flex-col gap-2">
@@ -276,9 +278,9 @@ function ProductImageRow({
           className="field h-8 min-h-8 px-2 py-1"
         />
 
-        <div className="flex flex-wrap items-center gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
           {image.is_primary ? (
-            <span className="font-medium text-foreground">Primary</span>
+            <span className="badge badge-success">Primary</span>
           ) : (
             <button
               type="button"

@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { EmptyState } from "@/app/_components/empty-state";
+import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import { getCategories } from "@/lib/catalog/categories";
 
 import { DeleteCategoryButton } from "./delete-category-button";
@@ -15,21 +16,22 @@ export default async function AdminCategoriesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Categories</h1>
-        <Link
-          href="/admin/categories/new"
-          className="btn btn-primary"
-        >
-          New category
-        </Link>
-      </div>
+      <AdminPageHeader
+        description={`${categories.length} categor${categories.length === 1 ? "y" : "ies"}`}
+        action={
+          <Link href="/admin/categories/new" className="btn btn-primary">
+            New category
+          </Link>
+        }
+      >
+        Categories
+      </AdminPageHeader>
 
       {categories.length === 0 ? (
         <EmptyState message="No categories yet." />
       ) : (
         <div className="table-wrap">
-          <table className="data-table">
+          <table className="data-table data-table-stack">
             <thead>
               <tr>
                 <th>Name</th>
@@ -43,14 +45,14 @@ export default async function AdminCategoriesPage() {
                 <tr
                   key={category.id}>
                   <td className="font-medium">{category.name}</td>
-                  <td className="text-muted">
+                  <td data-label="Slug" className="font-mono text-xs text-muted [overflow-wrap:anywhere]">
                     {category.slug}
                   </td>
-                  <td className="text-muted">
-                    {category.description || "—"}
+                  <td data-label="Description" className="max-w-md text-muted">
+                    <span className="line-clamp-2">{category.description || "—"}</span>
                   </td>
-                  <td>
-                    <div className="flex gap-3">
+                  <td className="cell-actions">
+                    <div className="flex justify-end gap-4 whitespace-nowrap">
                       <Link
                         href={`/admin/categories/${category.id}`}
                         className="link-action"

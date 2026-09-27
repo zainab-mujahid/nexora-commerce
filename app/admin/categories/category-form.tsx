@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 
 import { NameSlugFields } from "@/app/admin/_components/name-slug-fields";
@@ -17,7 +18,7 @@ export function CategoryForm({ category }: { category?: Category }) {
     <form
       action={formAction}
       onSubmit={submitWithoutReset(formAction)}
-      className="flex max-w-md flex-col gap-4"
+      className="card flex max-w-2xl flex-col gap-5 p-5 sm:p-6"
     >
       <NameSlugFields
         initialName={category?.name}
@@ -49,13 +50,18 @@ export function CategoryForm({ category }: { category?: Category }) {
         <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>
       )}
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="btn btn-primary self-start"
-      >
-        {pending ? "Saving…" : "Save"}
-      </button>
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
+        <button
+          type="submit"
+          disabled={pending}
+          className="btn btn-primary"
+        >
+          {pending ? "Saving…" : "Save"}
+        </button>
+        <Link href="/admin/categories" className="btn btn-secondary">
+          Cancel
+        </Link>
+      </div>
     </form>
   );
 }

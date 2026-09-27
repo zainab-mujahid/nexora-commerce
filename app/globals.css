@@ -354,4 +354,72 @@
       radial-gradient(120% 90% at 100% 0%, color-mix(in oklab, var(--foreground) 6%, transparent), transparent 60%),
       var(--surface);
   }
+
+  /* ---- Admin (operational workspace only) ---- */
+  /* Numeric table cells: right-aligned, fixed-width digits. */
+  .data-table .cell-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Below 640px, a .data-table-stack table renders each row as a labelled
+     block (label from the cell's data-label) instead of scrolling sideways.
+     Pure CSS: the <table> DOM is unchanged, and the header row stays in
+     the accessibility tree (visually hidden, not display:none). */
+  @media (max-width: 639.98px) {
+    .data-table-stack,
+    .data-table-stack tbody,
+    .data-table-stack tr,
+    .data-table-stack td {
+      display: block;
+    }
+    .data-table-stack thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .data-table-stack tbody tr {
+      padding: 0.875rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .data-table-stack tbody tr:last-child {
+      border-bottom: 0;
+    }
+    .data-table.data-table-stack td,
+    .data-table-stack td {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.25rem 0;
+      border-bottom: 0;
+      text-align: right;
+    }
+    .data-table-stack td[data-label]::before {
+      content: attr(data-label);
+      flex-shrink: 0;
+      text-align: left;
+      font-size: var(--text-xs);
+      line-height: var(--text-xs--line-height);
+      font-weight: 500;
+      color: var(--muted);
+    }
+    /* The row's identity cell (first) reads as the card title. */
+    .data-table-stack td:first-child {
+      justify-content: flex-start;
+      padding-bottom: 0.5rem;
+      text-align: left;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .data-table-stack td.cell-actions {
+      justify-content: flex-start;
+      padding-top: 0.625rem;
+    }
+    .data-table-stack td.cell-actions:empty {
+      display: none;
+    }
+  }
 }
