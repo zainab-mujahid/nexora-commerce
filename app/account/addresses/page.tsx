@@ -77,7 +77,7 @@ export default async function AddressesPage() {
               <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-3 text-sm">
                 <Link
                   href={`/account/addresses/${address.id}`}
-                  className="link-action"
+                  className="link-action inline-flex h-8 items-center"
                 >
                   Edit
                 </Link>

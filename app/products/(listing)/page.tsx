@@ -71,7 +71,12 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
       <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Shop</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+          Explore the Collection
+        </h1>
+        <p className="max-w-xl text-base text-muted text-pretty">
+          Discover products across every category, all in one place.
+        </p>
         {totalCount > 0 && (
           <p className="text-sm text-muted">
             {totalCount} product{totalCount === 1 ? "" : "s"}

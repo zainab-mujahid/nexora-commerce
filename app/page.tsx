@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Suspense } from "react";
 
@@ -7,6 +8,7 @@ import {
   FeaturedProducts,
   FeaturedProductsSkeleton,
 } from "@/app/_components/featured-products";
+import { HeroTypewriter } from "@/app/_components/hero-typewriter";
 import { getProfile, getUser } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
 import type { Category } from "@/lib/catalog/types";
@@ -37,12 +39,41 @@ export default async function Home() {
   return (
     <main className="flex flex-1 flex-col">
       <section className="mx-auto w-full max-w-6xl px-4 pt-6 sm:px-6 sm:pt-10">
-        <div className="hero-surface overflow-hidden rounded-2xl border border-border px-6 py-12 shadow-[var(--shadow-card)] sm:px-12 sm:py-16">
-          <div className="flex max-w-2xl flex-col gap-5">
-            <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
-              Nexora Commerce
-            </h1>
-            <p className="max-w-xl text-lg leading-relaxed text-muted text-pretty">
+        <div className="hero-banner hero-surface relative overflow-hidden rounded-2xl border border-border px-6 py-12 shadow-[var(--shadow-card)] sm:px-12 sm:py-16 lg:flex lg:min-h-[24rem] lg:items-center">
+          {/* Banner artwork as a decorative background layer (alt=""): the
+              copy stays on its dark left side. From 1024px the image is
+              anchored right, and from 768px at 82%, so the whole cart stays
+              in view beside the copy (which keeps to the left half). Below
+              768px there is no room for both, so the image is anchored to
+              its dark left side and zoomed from the left edge, keeping the
+              cart out of frame rather than under the text. Served as-is: it is
+              already a compact WebP. */}
+          <Image
+            src="/images/nexora-hero.webp"
+            alt=""
+            fill
+            unoptimized
+            loading="eager"
+            fetchPriority="high"
+            className="object-cover object-[0%_50%] max-md:origin-left max-md:scale-[1.35] md:object-[82%_50%] lg:object-[100%_45%]"
+          />
+          <div aria-hidden="true" className="hero-banner-overlay" />
+          {/* Decorative ambient layer behind the copy (see .hero-ambient). */}
+          <div aria-hidden="true" className="hero-ambient">
+            <span className="hero-orb hero-orb-a" />
+            <span className="hero-orb hero-orb-b" />
+            <span className="hero-orb hero-orb-c" />
+          </div>
+          <div className="relative flex max-w-2xl flex-col gap-5 md:max-w-[50%] lg:max-w-[52%]">
+            <div className="flex flex-col gap-2">
+              {/* xl: one line at 42px (~506px wide) ends clear of the floating gift
+                  box in the artwork; narrower widths wrap. */}
+              <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl xl:text-[2.625rem] xl:leading-none">
+                Shop smarter with Nexora.
+              </h1>
+              <HeroTypewriter className="text-2xl font-semibold tracking-tight text-foreground/75 sm:text-3xl" />
+            </div>
+            <p className="max-w-xl text-lg leading-relaxed text-foreground/80 text-pretty">
               {user
                 ? `Welcome back${profile?.full_name ? `, ${profile.full_name}` : ""}. Your next favorite find is waiting.`
                 : "Everyday products, thoughtfully curated. Sign up to start shopping."}

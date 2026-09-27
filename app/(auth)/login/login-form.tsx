@@ -11,7 +11,7 @@ export function LoginForm({ next }: { next?: string }) {
 
   return (
     <form action={action} className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">Sign in</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
 
       {next && <input type="hidden" name="next" value={next} />}
 
@@ -19,6 +19,7 @@ export function LoginForm({ next }: { next?: string }) {
         label="Email"
         name="email"
         type="email"
+        placeholder="name@example.com"
         autoComplete="email"
         errors={state?.errors?.email}
       />

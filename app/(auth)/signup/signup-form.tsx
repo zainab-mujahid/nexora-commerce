@@ -11,7 +11,7 @@ export function SignupForm() {
 
   return (
     <form action={action} className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">Create an account</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Create an account</h1>
 
       <TextField
         label="Full name"
@@ -23,6 +23,7 @@ export function SignupForm() {
         label="Email"
         name="email"
         type="email"
+        placeholder="name@example.com"
         autoComplete="email"
         errors={state?.errors?.email}
       />

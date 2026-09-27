@@ -40,6 +40,7 @@ export function AddressForm({
         label="Address line 1"
         name="line1"
         autoComplete="address-line1"
+        placeholder="Street address"
         defaultValue={address?.line1}
         errors={state?.errors?.line1}
       />
@@ -47,6 +48,7 @@ export function AddressForm({
         label="Address line 2 (optional)"
         name="line2"
         autoComplete="address-line2"
+        placeholder="Apartment, suite, unit, building"
         defaultValue={address?.line2 ?? ""}
         errors={state?.errors?.line2}
       />

@@ -274,7 +274,8 @@ function ProductImageRow({
           onChange={(event) => setAltText(event.target.value)}
           onBlur={handleAltTextBlur}
           disabled={busy}
-          placeholder="Alt text"
+          placeholder="Describe this image"
+          aria-label="Image alt text"
           className="field h-8 min-h-8 px-2 py-1"
         />
 

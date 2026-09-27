@@ -50,7 +50,8 @@
  * so they keep their contrast on dark backgrounds.
  */
 [data-theme="dark"],
-:root:not([data-theme="dark"]) .theme-inverse {
+:root:not([data-theme="dark"]) .theme-inverse,
+:root:not([data-theme="dark"]) .hero-banner {
   --background: #0f1217;
   --foreground: #e6e8ec;
   --surface: #181c23;
@@ -71,6 +72,13 @@
 
 /* An inverse subtree paints its own text color from the swapped tokens. */
 .theme-inverse {
+  color: var(--foreground);
+}
+
+/* The home hero banner artwork is dark navy behind the copy in BOTH themes,
+   so its content always uses the dark token set (listed in the dark block
+   above for the light theme; the dark theme already has it). */
+.hero-banner {
   color: var(--foreground);
 }
 
@@ -355,6 +363,168 @@
       var(--surface);
   }
 
+  /* Home hero ambient layer (decorative, aria-hidden): a faint grid that
+     fades out from behind the copy, plus three large soft orbs that drift
+     slowly around it. Everything derives from theme tokens (the cool --info
+     tone and --foreground at low strength), so the same composition reads
+     airy on the light theme and softly luminous on the dark one. Only
+     transform is animated (no blur filters); the hero clips it
+     (overflow-hidden), so it never affects layout or page width. */
+  .hero-ambient {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .hero-ambient::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    --hero-line: color-mix(in oklab, var(--foreground) 5%, transparent);
+    background-image:
+      linear-gradient(to right, var(--hero-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--hero-line) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(55% 75% at 30% 45%, #000 10%, transparent 75%);
+  }
+  .hero-orb {
+    position: absolute;
+    border-radius: 9999px;
+    will-change: transform;
+    animation: hero-drift-a 28s ease-in-out infinite alternate;
+  }
+  .hero-orb-a {
+    width: 36rem;
+    height: 36rem;
+    left: -10rem;
+    top: -14rem;
+    background: radial-gradient(closest-side, color-mix(in oklab, var(--info) 13%, transparent), transparent);
+  }
+  .hero-orb-b {
+    width: 30rem;
+    height: 30rem;
+    left: 32%;
+    top: 12%;
+    background: radial-gradient(closest-side, color-mix(in oklab, var(--foreground) 6%, transparent), transparent);
+    animation-name: hero-drift-b;
+    animation-duration: 34s;
+  }
+  .hero-orb-c {
+    width: 32rem;
+    height: 32rem;
+    left: -6rem;
+    bottom: -20rem;
+    background: radial-gradient(closest-side, color-mix(in oklab, var(--info) 9%, transparent), transparent);
+    animation-duration: 38s;
+    animation-delay: -14s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-orb {
+      animation: none;
+    }
+  }
+
+  /* Home hero banner image (public/images/nexora-hero.webp): dark navy on
+     the left, the bright cart composition on the right. The overlay only
+     deepens the side the copy sits on and fades out before the cart, with a
+     soft floor so the bottom edge settles into the card; it is built from
+     --background (the banner's dark token), so it tints like the artwork
+     instead of reading as a flat black box. Below 1024px the copy spans the
+     width and the image is cropped to its dark left side, so the overlay is
+     more even there. */
+  .hero-banner-overlay {
+    /* Scrim tinted toward the artwork's navy so it deepens the image rather
+       than greying it. */
+    --hero-scrim: color-mix(in oklab, var(--background) 55%, #0c1440);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in oklab, var(--hero-scrim) 92%, transparent) 0%,
+        color-mix(in oklab, var(--hero-scrim) 86%, transparent) 42%,
+        color-mix(in oklab, var(--hero-scrim) 45%, transparent) 57%,
+        transparent 72%
+      ),
+      linear-gradient(to top, color-mix(in oklab, var(--hero-scrim) 40%, transparent), transparent 35%);
+  }
+  /* Dark site: a light veil over the bright right side so it doesn't glare
+     against the dark page around the banner. */
+  [data-theme="dark"] .hero-banner-overlay {
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in oklab, var(--hero-scrim) 92%, transparent) 0%,
+        color-mix(in oklab, var(--hero-scrim) 86%, transparent) 42%,
+        color-mix(in oklab, var(--hero-scrim) 45%, transparent) 57%,
+        color-mix(in oklab, var(--hero-scrim) 14%, transparent) 72%
+      ),
+      linear-gradient(to top, color-mix(in oklab, var(--hero-scrim) 40%, transparent), transparent 35%);
+  }
+  /* 768–1023px: the copy keeps to the left half and the cart sits right,
+     so the scrim fades out sooner. */
+  @media (min-width: 768px) and (max-width: 1023.98px) {
+    .hero-banner-overlay,
+    [data-theme="dark"] .hero-banner-overlay {
+      background:
+        linear-gradient(
+          90deg,
+          color-mix(in oklab, var(--hero-scrim) 92%, transparent) 0%,
+          color-mix(in oklab, var(--hero-scrim) 86%, transparent) 48%,
+          color-mix(in oklab, var(--hero-scrim) 55%, transparent) 55%,
+          color-mix(in oklab, var(--hero-scrim) 18%, transparent) 62%,
+          transparent 70%
+        ),
+        linear-gradient(to top, color-mix(in oklab, var(--hero-scrim) 40%, transparent), transparent 35%);
+    }
+  }
+  /* Phones: the image is anchored to its dark left side and the copy spans
+     the width, so the scrim is even across it. */
+  @media (max-width: 767.98px) {
+    .hero-banner-overlay,
+    [data-theme="dark"] .hero-banner-overlay {
+      background:
+        linear-gradient(
+          90deg,
+          color-mix(in oklab, var(--hero-scrim) 90%, transparent),
+          color-mix(in oklab, var(--hero-scrim) 80%, transparent)
+        ),
+        linear-gradient(to top, color-mix(in oklab, var(--hero-scrim) 40%, transparent), transparent 40%);
+    }
+  }
+  /* Over the photo the ambient layer is atmosphere only: no grid lines (they
+     read as artifacts on artwork), and the drifting orbs at reduced
+     strength so they never compete with the image or the typewriter. */
+  .hero-banner .hero-ambient::before {
+    display: none;
+  }
+  .hero-banner .hero-orb {
+    opacity: 0.55;
+  }
+
+  /* Caret of the hero typewriter line (app/_components/hero-typewriter.tsx):
+     a thin bar in the text color that blinks on/off only while typing is
+     running; it keeps its width when hidden so the line never shifts. */
+  .hero-caret {
+    display: inline-block;
+    width: 2px;
+    height: 0.9em;
+    margin-left: 0.2em;
+    border-radius: 1px;
+    background: currentColor;
+    opacity: 0.7;
+    vertical-align: -0.1em;
+  }
+  .hero-caret-blink {
+    animation: hero-caret-blink 1.1s steps(1, end) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-caret-blink {
+      animation: none;
+    }
+  }
+
   /* ---- Admin (operational workspace only) ---- */
   /* Numeric table cells: right-aligned, fixed-width digits. */
   .data-table .cell-num {
@@ -421,5 +591,34 @@
     .data-table-stack td.cell-actions:empty {
       display: none;
     }
+  }
+}
+
+/* Home hero orb drift (see .hero-ambient): slow, small translate/scale. */
+@keyframes hero-drift-a {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(3rem, 1.5rem, 0) scale(1.08);
+  }
+}
+@keyframes hero-drift-b {
+  from {
+    transform: translate3d(0, 0, 0) scale(1.04);
+  }
+  to {
+    transform: translate3d(-3rem, -1.5rem, 0) scale(0.94);
+  }
+}
+
+/* Hero typewriter caret blink (see .hero-caret). */
+@keyframes hero-caret-blink {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0;
   }
 }

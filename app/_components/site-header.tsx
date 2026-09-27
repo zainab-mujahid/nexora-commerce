@@ -4,6 +4,9 @@ import { logout } from "@/lib/auth/actions";
 import { getProfile, getUser, type Profile } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
 
+import { HeaderNavLink } from "./header-nav-link";
+import { HeaderSearchSlot } from "./header-search-slot";
+import { MobileMenuCloser } from "./mobile-menu-closer";
 import { ProductSearchInput } from "./product-search-input";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -34,54 +37,84 @@ export async function SiteHeader() {
     getNavCategories(),
   ]);
 
+  // Layout by width (all presentation — every control is the same element
+  // at every size):
+  //   < 768px   brand · theme toggle · Menu (everything else in the menu)
+  //   768–1151  brand · search · theme toggle · Menu
+  //   ≥ 1152    brand · primary nav · search · account links · toggle
+  // Always a single row (fixed height, never wraps): below 1152px the full
+  // set of account links doesn't fit beside a usable search, so the Menu
+  // carries them instead of squeezing the row. The search stays compact
+  // (max-w-sm), centered in the space between its neighbours, and is left
+  // out on /products, which has its own search form (see HeaderSearchSlot)
+  // — the fixed height keeps the header from shifting when it is.
   return (
     <header className="border-b border-border bg-surface">
-      <div className="relative mx-auto flex max-w-6xl items-center gap-4 px-4 py-3 sm:px-6">
-        <Link href="/" className="text-lg font-semibold tracking-tight">
+      <div className="relative mx-auto flex h-15 max-w-6xl items-center gap-4 px-4 sm:px-6 min-[72rem]:gap-5">
+        <Link href="/" className="shrink-0 text-xl font-bold tracking-tight">
           Nexora
         </Link>
 
-        <nav className="hidden items-center gap-6 text-sm font-medium sm:flex">
-          <Link href="/" className="nav-link">
+        <nav className="hidden shrink-0 items-center gap-0.5 min-[72rem]:flex">
+          <HeaderNavLink href="/" exact>
             Home
-          </Link>
-          <Link href="/products" className="nav-link">
+          </HeaderNavLink>
+          <HeaderNavLink href="/products">
             Shop
-          </Link>
+          </HeaderNavLink>
           {categories.length > 0 && <CategoriesMenu categories={categories} />}
         </nav>
 
-        <SearchForm className="hidden max-w-sm flex-1 sm:flex" />
+        <HeaderSearchSlot className="hidden min-w-0 flex-1 justify-center md:flex">
+          <SearchForm className="flex w-full max-w-sm" />
+        </HeaderSearchSlot>
 
-        <div className="ml-auto hidden items-center sm:flex">
+        <div className="ml-auto hidden shrink-0 items-center min-[72rem]:flex">
           <AuthLinks user={user} profile={profile} />
         </div>
 
         {/* One toggle for every breakpoint: right after the account links on
-            desktop, and on mobile pushed right beside the Menu button (not
+            desktop, and on smaller screens beside the Menu button (not
             inside it) so it stays one tap away. */}
-        <ThemeToggle className="ml-auto sm:ml-0" />
+        <ThemeToggle className="ml-auto shrink-0 min-[72rem]:ml-0" />
 
-        <details className="group sm:hidden">
-          <summary className="btn btn-secondary h-8 list-none select-none px-3">
+        <details className="group shrink-0 min-[72rem]:hidden">
+          <summary className="btn btn-secondary h-8 list-none select-none gap-1.5 px-3">
+            <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="size-4">
+              <path d="M3.5 6h13M3.5 10h13M3.5 14h13" className="group-open:hidden" />
+              <path d="m5 5 10 10M15 5 5 15" className="hidden group-open:inline" />
+            </svg>
             Menu
           </summary>
-          <div className="absolute inset-x-0 top-full z-20 flex flex-col gap-4 border-b border-border bg-surface px-4 py-4 text-sm font-medium shadow-lg">
-            <Link href="/">Home</Link>
-            <Link href="/products">Shop</Link>
-            {categories.length > 0 && (
-              <div className="flex flex-col gap-3">
-                <span className="text-muted">Categories</span>
-                {categories.map((category) => (
-                  <Link key={category.slug} href={`/categories/${category.slug}`} className="pl-3">
-                    {category.name}
-                  </Link>
-                ))}
+          <div className="absolute inset-x-0 top-full z-20 border-b border-border bg-surface shadow-lg">
+            <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:px-6">
+              <HeaderSearchSlot className="md:hidden">
+                <SearchForm className="flex" />
+              </HeaderSearchSlot>
+              <div className="flex flex-col">
+                <HeaderNavLink href="/" exact variant="row">
+                  Home
+                </HeaderNavLink>
+                <HeaderNavLink href="/products" variant="row">
+                  Shop
+                </HeaderNavLink>
               </div>
-            )}
-            <SearchForm className="flex" />
-            <AuthLinks user={user} profile={profile} stacked />
+              {categories.length > 0 && (
+                <div className="flex flex-col border-t border-border pt-3">
+                  <span className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-subtle">Categories</span>
+                  {categories.map((category) => (
+                    <HeaderNavLink key={category.slug} href={`/categories/${category.slug}`} variant="row">
+                      {category.name}
+                    </HeaderNavLink>
+                  ))}
+                </div>
+              )}
+              <div className="border-t border-border pt-3">
+                <AuthLinks user={user} profile={profile} stacked />
+              </div>
+            </div>
           </div>
+          <MobileMenuCloser />
         </details>
       </div>
     </header>
@@ -101,17 +134,22 @@ export async function SiteHeader() {
 function CategoriesMenu({ categories }: { categories: NavCategory[] }) {
   return (
     <div className="group relative">
-      <span className="cursor-default nav-link group-hover:text-foreground">Categories</span>
+      <span className="inline-flex h-8 cursor-default items-center gap-1 rounded-md px-2.5 text-sm font-medium text-muted transition-colors group-hover:bg-fill group-hover:text-foreground">
+        Categories
+        <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="size-3.5 transition-transform group-hover:rotate-180">
+          <path d="m5.5 8 4.5 4.5L14.5 8" />
+        </svg>
+      </span>
       <div className="pointer-events-none absolute left-0 top-full z-20 pt-2 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100">
         <ul
           aria-label="Categories"
-          className="panel-float flex min-w-44 flex-col rounded-md p-1"
+          className="panel-float flex min-w-48 flex-col rounded-md p-1"
         >
           {categories.map((category) => (
             <li key={category.slug}>
               <Link
                 href={`/categories/${category.slug}`}
-                className="block rounded px-2.5 py-1.5 text-muted transition-colors hover:bg-fill hover:text-foreground"
+                className="block rounded px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-fill hover:text-foreground"
               >
                 {category.name}
               </Link>
@@ -140,19 +178,18 @@ function AuthLinks({
   profile: Profile | null;
   stacked?: boolean;
 }) {
-  const groupClass = stacked
-    ? "flex flex-col gap-3"
-    : "flex items-center gap-4 text-sm font-medium";
+  const variant = stacked ? "row" : "bar";
+  const groupClass = stacked ? "flex flex-col" : "flex items-center gap-0.5";
 
   if (!user) {
     return (
-      <div className={groupClass}>
-        <Link href="/login" className="nav-link">
+      <div className={stacked ? "flex flex-col gap-2" : "flex items-center gap-2"}>
+        <HeaderNavLink href="/login" variant={variant}>
           Log in
-        </Link>
+        </HeaderNavLink>
         <Link
           href="/signup"
-          className="btn btn-primary h-8 px-3"
+          className={stacked ? "btn btn-primary w-full" : "btn btn-primary h-8 px-3"}
         >
           Sign up
         </Link>
@@ -160,27 +197,38 @@ function AuthLinks({
     );
   }
 
+  const name = profile?.full_name?.trim() || "Account";
   return (
     <div className={groupClass}>
-      <Link href="/wishlist" className="nav-link">
+      <HeaderNavLink href="/wishlist" variant={variant}>
         Wishlist
-      </Link>
-      <Link href="/cart" className="nav-link">
+      </HeaderNavLink>
+      <HeaderNavLink href="/cart" variant={variant}>
         Cart
-      </Link>
-      <Link href="/orders" className="nav-link">
+      </HeaderNavLink>
+      <HeaderNavLink href="/orders" variant={variant}>
         Orders
-      </Link>
-      <Link href="/account" className="nav-link">
-        {profile?.full_name?.trim() || "Account"}
-      </Link>
+      </HeaderNavLink>
+      {!stacked && <span aria-hidden="true" className="mx-2 h-5 w-px bg-border" />}
+      {/* Long names are truncated in the bar; the full name stays in the
+          link text (and title) for assistive tech and hover. */}
+      <HeaderNavLink href="/account" variant={variant} title={stacked ? undefined : name}>
+        <span className={stacked ? "" : "max-w-[9rem] truncate"}>{name}</span>
+      </HeaderNavLink>
       {profile?.role === "admin" && (
-        <Link href="/admin" className="nav-link">
+        <HeaderNavLink href="/admin" variant={variant}>
           Admin
-        </Link>
+        </HeaderNavLink>
       )}
-      <form action={logout}>
-        <button type="submit" className="nav-link">
+      <form action={logout} className={stacked ? "mt-1 border-t border-border pt-2" : ""}>
+        <button
+          type="submit"
+          className={
+            stacked
+              ? "flex min-h-10 w-full items-center rounded-md px-3 text-sm font-medium text-muted transition-colors hover:bg-fill hover:text-foreground"
+              : "inline-flex h-8 items-center rounded-md px-2.5 text-sm font-medium text-muted transition-colors hover:bg-fill hover:text-foreground"
+          }
+        >
           Log out
         </button>
       </form>

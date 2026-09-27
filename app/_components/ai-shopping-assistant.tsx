@@ -242,12 +242,18 @@ export function AiShoppingAssistant({
         aria-expanded={isOpen}
         aria-controls="ai-shopping-assistant-panel"
         // theme-inverse: the launcher shares the panel's inverse surface
-        // (dark on the light theme, light on the dark theme).
-        className="theme-inverse fixed bottom-6 right-6 z-50 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-5 py-3 text-sm font-medium shadow-[var(--shadow-float)] transition-colors hover:bg-fill"
+        // (dark on the light theme, light on the dark theme). Its focus
+        // outline is drawn inside the pill: the inverse --ring color would
+        // barely show against the page around it.
+        className="theme-inverse fixed bottom-4 right-4 z-50 inline-flex h-11 items-center gap-2 rounded-full border border-border bg-surface pl-4 pr-5 text-sm font-medium text-foreground shadow-[var(--shadow-float)] transition-colors hover:bg-fill focus-visible:-outline-offset-4 sm:bottom-6 sm:right-6"
       >
-        <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" className="size-4 opacity-80">
-          <path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5l-1.6-4.4L4 8.5l4.4-1.6L10 2.5zM15.5 13l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8z" />
-        </svg>
+        {isOpen ? (
+          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="size-4 text-muted">
+            <path d="m5.5 8 4.5 4.5L14.5 8" />
+          </svg>
+        ) : (
+          <SparkleIcon className="size-4 text-muted" />
+        )}
         {isOpen ? "Close Assistant" : "AI Shopping Assistant"}
       </button>
 
@@ -269,23 +275,52 @@ export function AiShoppingAssistant({
           // bottom/right/width/height values below take over.
           className="theme-inverse fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface shadow-[var(--shadow-float)] sm:inset-x-auto sm:top-auto sm:bottom-24 sm:right-6 sm:h-[58vh] sm:max-h-[600px] sm:w-[380px] sm:max-w-[calc(100vw-3rem)] sm:rounded-xl sm:border"
         >
-          <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-            <h2 className="text-sm font-semibold">AI Shopping Assistant</h2>
+          <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
+            <span
+              aria-hidden="true"
+              className="flex size-8 shrink-0 items-center justify-center rounded-md bg-fill text-muted"
+            >
+              <SparkleIcon className="size-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-semibold leading-5">AI Shopping Assistant</h2>
+              <p className="text-xs leading-4 text-muted text-pretty">Recommends products from the Nexora catalog</p>
+            </div>
             <button
               type="button"
               onClick={() => setIsOpen(false)}
               aria-label="Close assistant panel"
-              className="rounded-md px-2 py-1 text-sm text-muted transition-colors hover:bg-fill hover:text-foreground"
+              className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-fill hover:text-foreground"
             >
-              Close
+              <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="size-4">
+                <path d="m5.5 5.5 9 9M14.5 5.5l-9 9" />
+              </svg>
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            <ul className="flex flex-col gap-3">
+          {/* overscroll-contain: scrolling the conversation to its end never
+              carries on into the page behind the panel. */}
+          <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+            <ul className="flex flex-col gap-4">
               {transcript.length === 0 && (
-                <li className="text-sm text-muted">
-                  Ask for what you need — e.g. &quot;comfortable black office shoes under $100&quot;.
+                <li className="flex flex-col gap-3 text-sm">
+                  <p className="text-muted">
+                    Describe what you&apos;re shopping for and I&apos;ll suggest matching products
+                    from the catalog. Add a budget or category to narrow it down, then follow
+                    up — for example, &ldquo;something cheaper&rdquo;.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-xs font-medium text-subtle">For example</p>
+                    {/* Plain quoted text, not boxes: these are examples to type,
+                        not controls, and must not look clickable. */}
+                    <ul className="flex flex-col gap-1 border-l-2 border-border pl-3">
+                      {["A laptop for work", "Comfortable shoes under $80"].map((example) => (
+                        <li key={example} className="italic text-muted">
+                          &ldquo;{example}&rdquo;
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </li>
               )}
 
@@ -295,11 +330,15 @@ export function AiShoppingAssistant({
                   className={message.role === "user" ? "flex justify-end" : "flex justify-start"}
                 >
                   {message.role === "user" ? (
-                    <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-foreground px-3.5 py-2 text-sm text-background">
+                    <p className="max-w-[85%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-foreground px-3.5 py-2 text-sm leading-relaxed text-background [overflow-wrap:anywhere]">
                       {message.text}
                     </p>
                   ) : (
-                    <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-fill px-3.5 py-2 text-sm">
+                    <div
+                      className={`max-w-[90%] rounded-lg rounded-bl-sm px-3.5 py-2.5 text-sm leading-relaxed [overflow-wrap:anywhere] ${
+                        message.kind === "error" ? "border border-border text-danger" : "bg-fill"
+                      }`}
+                    >
                       {message.kind === "ok" && (
                         <>
                           <p>{message.text}</p>
@@ -307,13 +346,13 @@ export function AiShoppingAssistant({
                               The product name shown is the authoritative
                               product.name, not assistant-invented text. */}
                           {message.recommendations.length > 0 && (
-                            <ul className="mt-2 flex flex-col gap-1 text-xs text-muted">
+                            <ul className="mt-3 flex flex-col gap-2.5 border-t border-border pt-3">
                               {message.recommendations.map((rec) => (
-                                <li key={rec.product.id}>
-                                  <span className="font-medium text-foreground">
-                                    {rec.product.name}:
-                                  </span>{" "}
-                                  {rec.reason}
+                                <li key={rec.product.id} className="flex flex-col gap-0.5">
+                                  <span className="text-[13px] font-medium leading-snug text-foreground">
+                                    {rec.product.name}
+                                  </span>
+                                  <span className="text-xs leading-relaxed text-muted">{rec.reason}</span>
                                 </li>
                               ))}
                             </ul>
@@ -321,7 +360,15 @@ export function AiShoppingAssistant({
                         </>
                       )}
                       {message.kind === "no_results" && <p>{message.text}</p>}
-                      {message.kind === "error" && <p className="text-danger">{message.error}</p>}
+                      {message.kind === "error" && (
+                        <p className="flex items-start gap-2">
+                          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="mt-0.5 size-4 shrink-0">
+                            <circle cx="10" cy="10" r="7.25" />
+                            <path d="M10 6.5v4M10 13.5h.01" />
+                          </svg>
+                          <span>{message.error}</span>
+                        </p>
+                      )}
                     </div>
                   )}
                 </li>
@@ -331,7 +378,7 @@ export function AiShoppingAssistant({
                 <li className="flex justify-start">
                   <div
                     role="status"
-                    className="max-w-[85%] rounded-2xl rounded-bl-md bg-fill px-3.5 py-2 text-sm text-muted"
+                    className="rounded-lg rounded-bl-sm bg-fill px-3.5 py-2.5 text-sm text-muted"
                   >
                     <span className="sr-only">Assistant is replying</span>
                     {/* Three dots bouncing in sequence (staggered delays);
@@ -359,41 +406,57 @@ export function AiShoppingAssistant({
             </ul>
           </div>
 
-          <form
-            onSubmit={handleSubmit}
-            className="flex shrink-0 items-end gap-2 border-t border-border px-4 py-3"
-          >
-            {/* Wraps long prompts; grows with its content up to max-h-32,
-                then scrolls vertically. Enter sends through the form's own
-                submit (handleSubmit), Shift+Enter inserts a new line, and
-                Enter while an IME composition is active is left alone. */}
-            <textarea
-              ref={inputRef}
-              rows={1}
-              value={inputValue}
-              onChange={(event) => setInputValue(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              maxLength={MAX_INPUT_LENGTH}
-              disabled={isPending}
-              placeholder="e.g. comfortable black office shoes under $100"
-              aria-label="Shopping request"
-              className="field max-h-32 min-h-10 flex-1 resize-none overflow-y-auto py-2.5 leading-5 placeholder:truncate"
-            />
-            <button
-              type="submit"
-              disabled={isPending || inputValue.trim().length === 0}
-              className="btn btn-primary h-10"
-            >
-              {isPending ? "Replying…" : "Send"}
-            </button>
+          <form onSubmit={handleSubmit} className="shrink-0 border-t border-border p-3">
+            {/* One composer: the prompt and the send button share a single
+                field-style border, and the focus ring follows focus inside it. */}
+            <div className="flex items-end gap-1.5 rounded-md border border-input bg-surface p-1 transition-[border-color,box-shadow] focus-within:border-ring focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_18%,transparent)] has-[textarea:disabled]:bg-fill">
+              {/* Wraps long prompts; grows with its content up to max-h-32,
+                  then scrolls vertically. Enter sends through the form's own
+                  submit (handleSubmit), Shift+Enter inserts a new line, and
+                  Enter while an IME composition is active is left alone. */}
+              <textarea
+                ref={inputRef}
+                rows={1}
+                value={inputValue}
+                onChange={(event) => setInputValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                maxLength={MAX_INPUT_LENGTH}
+                disabled={isPending}
+                placeholder="Ask for product recommendations…"
+                aria-label="Shopping request"
+                className="max-h-32 min-h-9 flex-1 resize-none overflow-y-auto bg-transparent px-2 py-2 text-sm leading-5 text-foreground outline-none placeholder:truncate placeholder:text-subtle disabled:cursor-not-allowed disabled:text-muted"
+              />
+              <button
+                type="submit"
+                disabled={isPending || inputValue.trim().length === 0}
+                aria-label={isPending ? "Replying…" : "Send"}
+                title={isPending ? "Replying…" : "Send"}
+                className="btn btn-primary size-9 shrink-0 p-0"
+              >
+                <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-4">
+                  <path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />
+                </svg>
+              </button>
+            </div>
+            <p className="mt-1.5 hidden px-1 text-[11px] text-subtle sm:block">
+              Enter to send · Shift + Enter for a new line
+            </p>
           </form>
         </div>
       )}
     </>
+  );
+}
+
+function SparkleIcon({ className }: { className: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" className={className}>
+      <path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5l-1.6-4.4L4 8.5l4.4-1.6L10 2.5zM15.5 13l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8z" />
+    </svg>
   );
 }
