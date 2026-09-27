@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 
 import { requireUser } from "@/lib/auth/dal";
@@ -15,9 +16,14 @@ export default async function NewAddressPage() {
   const addresses = await getAddresses();
 
   return (
-    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">New address</h1>
+    <div className="flex max-w-2xl flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <Link href="/account/addresses" className="nav-link inline-flex w-fit items-center gap-1.5 text-sm">
+          <span aria-hidden="true">&larr;</span> Back to addresses
+        </Link>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">New address</h1>
+      </div>
       <AddressForm isFirstAddress={addresses.length === 0} />
-    </main>
+    </div>
   );
 }

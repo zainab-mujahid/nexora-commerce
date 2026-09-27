@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
-import { EmptyState } from "@/app/_components/empty-state";
+import { ShoppingEmptyState } from "@/app/_components/shopping-empty-state";
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
@@ -20,42 +20,47 @@ export default async function OrdersPage() {
   const orders = await getOrders();
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Orders</h1>
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-1.5">
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Orders</h1>
         <p className="text-sm text-muted">Your past orders and their status.</p>
       </div>
 
       {orders.length === 0 ? (
-        <EmptyState message="You haven't placed any orders yet." />
+        <ShoppingEmptyState icon="bag" message="You haven't placed any orders yet." />
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className="flex flex-col gap-3">
           {orders.map((order) => (
             <li key={order.id}>
               <Link
                 href={`/orders/${order.id}`}
-                className="card card-interactive flex flex-col gap-2 p-4 text-sm"
+                className="card card-interactive group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 p-4 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:gap-x-6 sm:p-5"
               >
-                <div className="flex items-center justify-between gap-4">
-                  <span className="font-medium">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="font-semibold">
                     Order #{order.id.slice(0, 8)}
                   </span>
-                  <span className={`capitalize ${orderStatusBadgeClass(order.status)}`}>
-                    {order.status}
+                  <span className="text-muted tabular-nums">
+                    {new Date(order.created_at).toLocaleDateString()}
                   </span>
                 </div>
-                <div className="flex items-center justify-between gap-4 text-muted">
-                  <span>{new Date(order.created_at).toLocaleDateString()}</span>
-                  <span>
-                    {order.itemCount} item{order.itemCount === 1 ? "" : "s"} &middot;{" "}
-                    {formatPrice(order.total)}
-                  </span>
-                </div>
+                <span className={`justify-self-end capitalize sm:order-3 ${orderStatusBadgeClass(order.status)}`}>
+                  {order.status}
+                </span>
+                <span className="text-muted sm:order-2">
+                  {order.itemCount} item{order.itemCount === 1 ? "" : "s"} &middot;{" "}
+                  <span className="font-semibold text-foreground tabular-nums">{formatPrice(order.total)}</span>
+                </span>
+                <span aria-hidden="true" className="hidden text-subtle transition-transform group-hover:translate-x-0.5 sm:order-4 sm:block">
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="size-4">
+                    <path d="m8 5 5 5-5 5" />
+                  </svg>
+                </span>
               </Link>
             </li>
           ))}
         </ul>
       )}
-    </main>
+    </div>
   );
 }

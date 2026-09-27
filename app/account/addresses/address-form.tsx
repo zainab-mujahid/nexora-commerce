@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 
 import { TextField } from "@/app/_components/text-field";
@@ -27,7 +28,7 @@ export function AddressForm({
   const isLockedDefault = address?.is_default ?? false;
 
   return (
-    <form action={formAction} className="flex max-w-md flex-col gap-4">
+    <form action={formAction} className="card flex flex-col gap-5 p-5 sm:p-6">
       <TextField
         label="Full name"
         name="fullName"
@@ -50,7 +51,7 @@ export function AddressForm({
         errors={state?.errors?.line2}
       />
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-5 sm:grid-cols-2 sm:gap-4">
         <TextField
           label="City"
           name="city"
@@ -67,7 +68,7 @@ export function AddressForm({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-5 sm:grid-cols-2 sm:gap-4">
         <TextField
           label="Postal code"
           name="postalCode"
@@ -120,13 +121,18 @@ export function AddressForm({
         <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>
       )}
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="btn btn-primary self-start"
-      >
-        {pending ? "Saving…" : "Save"}
-      </button>
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
+        <button
+          type="submit"
+          disabled={pending}
+          className="btn btn-primary"
+        >
+          {pending ? "Saving…" : "Save"}
+        </button>
+        <Link href="/account/addresses" className="btn btn-secondary">
+          Cancel
+        </Link>
+      </div>
     </form>
   );
 }

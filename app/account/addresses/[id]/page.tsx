@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
@@ -23,9 +24,14 @@ export default async function EditAddressPage({
   if (!address) notFound();
 
   return (
-    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Edit address</h1>
+    <div className="flex max-w-2xl flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <Link href="/account/addresses" className="nav-link inline-flex w-fit items-center gap-1.5 text-sm">
+          <span aria-hidden="true">&larr;</span> Back to addresses
+        </Link>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Edit address</h1>
+      </div>
       <AddressForm address={address} />
-    </main>
+    </div>
   );
 }

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
-import { EmptyState } from "@/app/_components/empty-state";
 import { requireUser } from "@/lib/auth/dal";
 import { getAddresses } from "@/lib/addresses/queries";
 
@@ -21,10 +20,10 @@ export default async function AddressesPage() {
   const addresses = await getAddresses();
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Addresses</h1>
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Addresses</h1>
           <p className="text-sm text-muted">
             Manage the addresses used for delivery.
           </p>
@@ -38,38 +37,44 @@ export default async function AddressesPage() {
       </div>
 
       {addresses.length === 0 ? (
-        <EmptyState message="You haven't added any addresses yet." />
+        <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
+          <span aria-hidden="true" className="flex size-12 items-center justify-center rounded-full bg-surface text-muted ring-1 ring-border">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-5">
+              <path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21Z" />
+              <circle cx="12" cy="9.5" r="2.5" />
+            </svg>
+          </span>
+          <p className="max-w-sm text-sm text-muted">You haven&apos;t added any addresses yet.</p>
+        </div>
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className="grid gap-4 md:grid-cols-2">
           {addresses.map((address) => (
             <li
               key={address.id}
-              className="flex flex-col gap-2 card p-4 text-sm"
+              className={`card flex flex-col text-sm ${address.is_default ? "border-input" : ""}`}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex flex-col">
-                  <span className="font-medium">
-                    {address.full_name}
-                    {address.is_default && (
-                      <span className="badge ml-2 align-middle">
-                        Default
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-muted">
-                    {address.line1}
-                    {address.line2 ? `, ${address.line2}` : ""}
-                  </span>
-                  <span className="text-muted">
-                    {address.city}
-                    {address.state ? `, ${address.state}` : ""}{" "}
-                    {address.postal_code}
-                  </span>
-                  <span className="text-muted">{address.country}</span>
-                </div>
+              <div className="flex flex-1 flex-col gap-0.5 p-5 [overflow-wrap:anywhere]">
+                <span className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
+                  {address.full_name}
+                  {address.is_default && (
+                    <span className="badge font-medium">
+                      Default
+                    </span>
+                  )}
+                </span>
+                <span className="text-muted">
+                  {address.line1}
+                  {address.line2 ? `, ${address.line2}` : ""}
+                </span>
+                <span className="text-muted">
+                  {address.city}
+                  {address.state ? `, ${address.state}` : ""}{" "}
+                  {address.postal_code}
+                </span>
+                <span className="text-muted">{address.country}</span>
               </div>
 
-              <div className="flex gap-4 text-xs font-medium">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-3 text-sm">
                 <Link
                   href={`/account/addresses/${address.id}`}
                   className="link-action"
@@ -79,12 +84,14 @@ export default async function AddressesPage() {
                 {!address.is_default && (
                   <SetDefaultAddressButton addressId={address.id} />
                 )}
-                <DeleteAddressButton addressId={address.id} />
+                <div className="ml-auto">
+                  <DeleteAddressButton addressId={address.id} />
+                </div>
               </div>
             </li>
           ))}
         </ul>
       )}
-    </main>
+    </div>
   );
 }

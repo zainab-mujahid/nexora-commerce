@@ -17,9 +17,9 @@ export default async function AccountPage() {
   const profile = await getProfile();
 
   return (
-    <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-8 px-4 py-12 sm:px-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-1.5">
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Account</h1>
         <p className="text-sm text-muted">
           Manage your profile details.
         </p>
@@ -32,31 +32,35 @@ export default async function AccountPage() {
         </p>
       ) : (
         <>
-          <dl className="flex flex-col gap-3 card p-4 text-sm">
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-muted">Email</dt>
-              <dd>{user.email ?? "—"}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-muted">Role</dt>
-              <dd className="capitalize">{profile.role}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-muted">Member since</dt>
-              <dd>{new Date(profile.created_at).toLocaleDateString()}</dd>
-            </div>
-          </dl>
+          <div className="grid items-start gap-6 md:grid-cols-2">
+            <dl className="card divide-y divide-border px-5 text-sm">
+              <div className="flex flex-col gap-1 py-4 sm:flex-row sm:items-baseline sm:justify-between sm:gap-6">
+                <dt className="text-muted">Email</dt>
+                <dd className="font-medium [overflow-wrap:anywhere] sm:text-right">{user.email ?? "—"}</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-6 py-4">
+                <dt className="text-muted">Role</dt>
+                <dd className="font-medium capitalize">{profile.role}</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-6 py-4">
+                <dt className="text-muted">Member since</dt>
+                <dd className="font-medium tabular-nums">{new Date(profile.created_at).toLocaleDateString()}</dd>
+              </div>
+            </dl>
 
-          <AccountForm defaultFullName={profile.full_name ?? ""} />
+            <div className="card p-5">
+              <AccountForm defaultFullName={profile.full_name ?? ""} />
+            </div>
+          </div>
 
           <Link
             href="/account/addresses"
-            className="link-action self-start text-sm"
+            className="link-action inline-flex w-fit items-center gap-1.5 text-sm"
           >
-            Manage addresses
+            Manage addresses <span aria-hidden="true">&rarr;</span>
           </Link>
         </>
       )}
-    </main>
+    </div>
   );
 }

@@ -25,81 +25,97 @@ export default async function OrderDetailPage({
 
   const address = order.shipping_address;
 
+  // Everything below is the order's own recorded data: item names and prices
+  // are order_items snapshots and the address is the orders.shipping_address
+  // snapshot — never the current product or saved-address values.
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-12 sm:px-6">
-      <div className="flex flex-col gap-1">
-        <Link href="/orders" className="link-action self-start text-sm">
-          &larr; Orders
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-3">
+        <Link href="/orders" className="nav-link inline-flex w-fit items-center gap-1.5 text-sm">
+          <span aria-hidden="true">&larr;</span> Back to orders
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">Order details</h1>
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+          <div className="flex flex-col gap-1.5">
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Order details</h1>
+            <p className="text-sm text-muted">
+              Order #{order.id.slice(0, 8)} &middot;{" "}
+              <span className="tabular-nums">{new Date(order.created_at).toLocaleDateString()}</span>
+            </p>
+          </div>
+          <span className={`capitalize ${orderStatusBadgeClass(order.status)} px-3 py-1 text-sm`}>
+            {order.status}
+          </span>
+        </div>
         <Suspense fallback={null}>
           <PlacedBanner />
         </Suspense>
       </div>
 
-      <section className="flex flex-col gap-2 card p-4 text-sm">
-        <div className="flex items-center justify-between gap-4">
-          <span className="font-medium">Order ID</span>
-          <span className="font-mono text-xs text-muted">{order.id}</span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="font-medium">Status</span>
-          <span className={`capitalize ${orderStatusBadgeClass(order.status)}`}>{order.status}</span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="font-medium">Placed on</span>
-          <span>{new Date(order.created_at).toLocaleString()}</span>
-        </div>
-      </section>
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <section aria-labelledby="order-items-heading" className="card flex flex-col gap-4 p-5 sm:p-6">
+          <h2 id="order-items-heading" className="text-lg font-semibold tracking-tight">Items</h2>
+          <ul className="flex flex-col divide-y divide-border border-y border-border">
+            {order.items.map((item) => (
+              <li
+                key={item.id}
+                className="flex items-start justify-between gap-4 py-3.5 text-sm"
+              >
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <p className="font-medium [overflow-wrap:anywhere]">{item.product_name}</p>
+                  <p className="text-muted tabular-nums">
+                    {formatPrice(item.unit_price)} &times; {item.quantity}
+                  </p>
+                </div>
+                <p className="shrink-0 font-medium tabular-nums">{formatPrice(item.subtotal)}</p>
+              </li>
+            ))}
+          </ul>
 
-      <section className="flex flex-col gap-2 card p-4 text-sm">
-        <h2 className="text-sm font-semibold">Shipping address</h2>
-        <p>{address.full_name}</p>
-        <p className="text-muted">
-          {address.line1}
-          {address.line2 ? `, ${address.line2}` : ""}
-        </p>
-        <p className="text-muted">
-          {address.city}
-          {address.state ? `, ${address.state}` : ""} {address.postal_code}
-        </p>
-        <p className="text-muted">{address.country}</p>
-      </section>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between text-sm text-muted">
+              <span>Subtotal</span>
+              <span className="tabular-nums">{formatPrice(order.subtotal)}</span>
+            </div>
+            <div className="flex items-baseline justify-between border-t border-border pt-3 text-base font-semibold">
+              <span>Total</span>
+              <span className="text-xl tracking-tight tabular-nums">{formatPrice(order.total)}</span>
+            </div>
+          </div>
+        </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold">Items</h2>
-        <ul className="flex flex-col gap-2">
-          {order.items.map((item) => (
-            <li
-              key={item.id}
-              className="flex items-center justify-between gap-4 card p-3 text-sm"
-            >
-              <div>
-                <p className="font-medium">{item.product_name}</p>
-                <p className="text-muted">
-                  {formatPrice(item.unit_price)} &times; {item.quantity}
-                </p>
+        <div className="flex flex-col gap-6">
+          <section className="card p-5 text-sm">
+            <dl className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <dt className="text-muted">Order ID</dt>
+                <dd className="font-mono text-xs [overflow-wrap:anywhere]">{order.id}</dd>
               </div>
-              <p className="font-medium">{formatPrice(item.subtotal)}</p>
-            </li>
-          ))}
-        </ul>
+              <div className="flex flex-col gap-1">
+                <dt className="text-muted">Placed on</dt>
+                <dd className="tabular-nums">{new Date(order.created_at).toLocaleString()}</dd>
+              </div>
+            </dl>
+          </section>
 
-        <div className="flex flex-col gap-1 border-t border-border pt-3">
-          <div className="flex items-center justify-between text-sm text-muted">
-            <span>Subtotal</span>
-            <span>{formatPrice(order.subtotal)}</span>
-          </div>
-          <div className="flex items-center justify-between text-lg font-semibold">
-            <span>Total</span>
-            <span>{formatPrice(order.total)}</span>
-          </div>
+          <section aria-labelledby="order-address-heading" className="card flex flex-col gap-2 p-5 text-sm [overflow-wrap:anywhere]">
+            <h2 id="order-address-heading" className="mb-1 text-sm font-semibold">Shipping address</h2>
+            <p className="font-medium">{address.full_name}</p>
+            <p className="text-muted">
+              {address.line1}
+              {address.line2 ? `, ${address.line2}` : ""}
+            </p>
+            <p className="text-muted">
+              {address.city}
+              {address.state ? `, ${address.state}` : ""} {address.postal_code}
+            </p>
+            <p className="text-muted">{address.country}</p>
+          </section>
         </div>
-      </section>
+      </div>
 
       <Link href="/products" className="link-action self-start text-sm">
         Continue shopping
       </Link>
-    </main>
+    </div>
   );
 }
