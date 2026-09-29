@@ -30,6 +30,12 @@ export function LoginForm({ next }: { next?: string }) {
         autoComplete="current-password"
         errors={state?.errors?.password}
       />
+      <Link
+        href="/forgot-password"
+        className="link-action -mt-2 self-end text-sm font-normal text-muted hover:text-foreground"
+      >
+        Forgot password?
+      </Link>
 
       {state?.message && (
         <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>
