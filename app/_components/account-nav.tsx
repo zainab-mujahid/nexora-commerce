@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { ActiveIndicator } from "./motion/active-indicator";
+
 // Links to the existing customer-account routes only. Account is current
 // only on /account itself; Addresses and Orders also cover their sub-pages.
 const ITEMS = [
@@ -24,12 +26,11 @@ export function AccountNav() {
               <Link
                 href={item.href}
                 aria-current={current ? "page" : undefined}
-                className={`block rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors ${
-                  current
-                    ? "bg-foreground text-background"
-                    : "text-muted hover:bg-fill hover:text-foreground"
+                className={`relative isolate block rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors duration-200 ${
+                  current ? "text-background" : "text-muted hover:bg-fill hover:text-foreground"
                 }`}
               >
+                {current && <ActiveIndicator layoutId="account-nav-current" className="inset-0 -z-10 rounded-md bg-foreground" />}
                 {item.label}
               </Link>
             </li>

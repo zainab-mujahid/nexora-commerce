@@ -2,6 +2,8 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { AiShoppingAssistant } from "@/app/_components/ai-shopping-assistant";
+import { ActiveIndicator } from "@/app/_components/motion/active-indicator";
+import { Reveal } from "@/app/_components/motion/reveal";
 import { CatalogEmptyState } from "@/app/_components/catalog-empty-state";
 import { ProductGrid } from "@/app/_components/product-grid";
 import { ProductSearchInput } from "@/app/_components/product-search-input";
@@ -45,6 +47,17 @@ function firstValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+// Category filter pills. The selected pill's dark fill is a shared-layout
+// indicator (ActiveIndicator) drawn behind the link in a small wrapper, so
+// switching category slides it across instead of swapping instantly. The
+// link itself keeps just its text label as its content.
+const PILL_WRAP = "relative isolate inline-flex rounded-full";
+const PILL =
+  "rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors duration-200";
+const PILL_ON = "border-foreground text-background";
+const PILL_OFF = "border-border bg-surface text-muted hover:border-input hover:text-foreground";
+const PILL_INDICATOR = "inset-0 -z-10 rounded-full bg-foreground";
+
 export default async function ProductsPage({ searchParams }: PageProps<"/products">) {
   const sp = await searchParams;
   const q = firstValue(sp.q)?.trim() || undefined;
@@ -70,8 +83,9 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+      <Reveal trigger="mount" className="flex flex-col gap-3">
+        <span className="eyebrow">The collection</span>
+        <h1 className="display-title text-4xl sm:text-5xl">
           Explore the Collection
         </h1>
         <p className="max-w-xl text-base text-muted text-pretty">
@@ -87,7 +101,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
             )}
           </p>
         )}
-      </div>
+      </Reveal>
 
       {/* key: category links navigate client-side and keep this form mounted,
           and defaultValue only applies on mount — without re-keying, the
@@ -95,7 +109,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       <form
         key={`${q ?? ""}|${sort}|${category ?? ""}`}
         action="/products"
-        className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3 shadow-[var(--shadow-card)] sm:flex-row sm:items-center sm:justify-between"
+        className="card flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between"
       >
         {category && <input type="hidden" name="category" value={category} />}
         <ProductSearchInput className="w-full sm:max-w-sm" defaultValue={q ?? ""} />
@@ -125,31 +139,30 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
 
       {categories.length > 0 && (
         <div data-catalog-nav className="flex flex-wrap gap-2">
-          <Link
-            href={buildHref(currentParams, { category: undefined, q: undefined })}
-            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-              !category
-                ? "border-foreground bg-foreground text-background"
-                : "border-border bg-surface text-muted hover:border-input hover:text-foreground"
-            }`}
-          >
-            All
-          </Link>
-          {categories.map((cat) => (
+          <span className={PILL_WRAP}>
+            {!category && <ActiveIndicator layoutId="catalog-pill" className={PILL_INDICATOR} />}
             <Link
-              key={cat.id}
-              href={buildHref(currentParams, {
-                category: category === cat.slug ? undefined : cat.slug,
-                q: undefined,
-              })}
-              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                category === cat.slug
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-surface text-muted hover:border-input hover:text-foreground"
-              }`}
+              href={buildHref(currentParams, { category: undefined, q: undefined })}
+              aria-current={!category ? "page" : undefined}
+              className={`${PILL} ${!category ? PILL_ON : PILL_OFF}`}
             >
-              {cat.name}
+              All
             </Link>
+          </span>
+          {categories.map((cat) => (
+            <span key={cat.id} className={PILL_WRAP}>
+              {category === cat.slug && <ActiveIndicator layoutId="catalog-pill" className={PILL_INDICATOR} />}
+              <Link
+                href={buildHref(currentParams, {
+                  category: category === cat.slug ? undefined : cat.slug,
+                  q: undefined,
+                })}
+                aria-current={category === cat.slug ? "page" : undefined}
+                className={`${PILL} ${category === cat.slug ? PILL_ON : PILL_OFF}`}
+              >
+                {cat.name}
+              </Link>
+            </span>
           ))}
         </div>
       )}
@@ -172,7 +185,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
         catalogKey={buildHref(currentParams, { page: page > 1 ? String(page) : undefined })}
       >
         <div className="border-b border-border pb-4">
-          <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">All Products</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">All Products</h2>
         </div>
 
         {products.length === 0 ? (

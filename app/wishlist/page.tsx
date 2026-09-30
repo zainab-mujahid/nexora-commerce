@@ -5,6 +5,7 @@ import { pickDisplayImage } from "@/app/_components/product-image-display";
 import { ProductImageFrame } from "@/app/_components/product-image-frame";
 import { ShoppingEmptyState } from "@/app/_components/shopping-empty-state";
 import { StockBadge } from "@/app/_components/stock-badge";
+import { Reveal, Stagger, StaggerItem } from "@/app/_components/motion/reveal";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getWishlistItems } from "@/lib/wishlist/queries";
@@ -28,12 +29,12 @@ export default async function WishlistPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Wishlist</h1>
+      <Reveal as="h1" trigger="mount" className="display-title text-3xl sm:text-4xl">Wishlist</Reveal>
 
       {items.length === 0 ? (
         <ShoppingEmptyState icon="heart" message="Your wishlist is empty." />
       ) : (
-        <ul className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 sm:gap-x-6 lg:grid-cols-4">
+        <Stagger as="ul" className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 sm:gap-x-6 lg:grid-cols-4">
           {items.map((item) => {
             // The product was deactivated after being wishlisted and RLS
             // (products_select_active_or_admin) now hides it from this
@@ -45,7 +46,7 @@ export default async function WishlistPage() {
             if (!item.product) {
               const label = item.unavailableProduct;
               return (
-                <li key={item.id} className="flex flex-col gap-3">
+                <StaggerItem as="li" glide key={item.id} className="flex flex-col gap-3">
                   <ProductImageFrame
                     image={pickDisplayImage(label?.images ?? [])}
                     alt={label?.name ?? "Unavailable product"}
@@ -60,7 +61,7 @@ export default async function WishlistPage() {
                       <RemoveWishlistItemButton wishlistItemId={item.id} />
                     </div>
                   </div>
-                </li>
+                </StaggerItem>
               );
             }
 
@@ -70,7 +71,7 @@ export default async function WishlistPage() {
               // One product link per item (tests rely on it): the name link
               // stretches over the whole card via ::after, and the actions
               // sit above it (relative z-10) so they stay clickable.
-              <li
+              <StaggerItem as="li" glide
                 key={item.id}
                 className="group relative flex flex-col gap-3 rounded-lg has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-4 has-[a:focus-visible]:outline-ring"
               >
@@ -109,10 +110,10 @@ export default async function WishlistPage() {
                     </div>
                   </div>
                 </div>
-              </li>
+              </StaggerItem>
             );
           })}
-        </ul>
+        </Stagger>
       )}
     </main>
   );

@@ -26,8 +26,9 @@ export function AdminPageHeader({
         </Link>
       )}
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{children}</h1>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="eyebrow">Admin workspace</span>
+          <h1 className="display-title text-2xl sm:text-3xl">{children}</h1>
           {description && <p className="text-sm text-muted [overflow-wrap:anywhere]">{description}</p>}
         </div>
         {action}

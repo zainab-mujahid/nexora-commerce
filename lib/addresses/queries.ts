@@ -1,4 +1,5 @@
 import { cache } from "react";
+import * as z from "zod";
 
 import { requireUser } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
@@ -39,9 +40,17 @@ export const getAddresses = cache(async (): Promise<Address[]> => {
   return data;
 });
 
+// id comes straight from the URL. Postgres rejects a non-UUID string for a
+// uuid column with an error (a 500), so a malformed id is answered like one
+// that matches nothing (null -> the page's notFound()) without reaching the
+// database — the same handling as orderIdSchema in lib/orders/queries.ts.
+const addressIdSchema = z.uuid();
+
 export const getAddressById = cache(
   async (id: string): Promise<Address | null> => {
     const user = await requireUser();
+    if (!addressIdSchema.safeParse(id).success) return null;
+
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("addresses")

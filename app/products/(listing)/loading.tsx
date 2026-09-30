@@ -8,9 +8,10 @@ export default function Loading() {
       aria-hidden="true"
       className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 motion-safe:animate-pulse sm:px-6 sm:py-14"
     >
-      <div className="flex flex-col gap-2">
-        <div className="h-9 w-28 rounded bg-fill sm:h-10" />
-        <div className="h-5 w-24 rounded bg-fill" />
+      <div className="flex flex-col gap-3">
+        <div className="h-4 w-28 rounded bg-fill" />
+        <div className="h-10 w-72 max-w-full rounded bg-fill sm:h-12" />
+        <div className="h-5 w-80 max-w-full rounded bg-fill" />
       </div>
       <div className="h-[7.75rem] rounded-lg bg-fill sm:h-[3.875rem]" />
       <div className="flex gap-2">

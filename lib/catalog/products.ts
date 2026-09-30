@@ -1,5 +1,6 @@
 import { cache } from "react";
 
+import { adminResourceIdSchema } from "@/lib/admin/schemas";
 import { getS3PublicUrl } from "@/lib/s3/url";
 import { createClient } from "@/lib/supabase/server";
 
@@ -132,6 +133,12 @@ export const getAdminProducts = cache(async (): Promise<ProductDetail[]> => {
 
 export const getAdminProductById = cache(
   async (id: string): Promise<ProductDetail | null> => {
+    // id comes straight from the URL. A malformed value is answered like an
+    // id that matches nothing (null -> the page's notFound()) instead of
+    // reaching Postgres, which rejects a non-UUID for a uuid column with an
+    // error (a 500). Same check the admin Server Actions apply to ids.
+    if (!adminResourceIdSchema.safeParse(id).success) return null;
+
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("products")

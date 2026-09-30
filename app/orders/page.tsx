@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 
 import { ShoppingEmptyState } from "@/app/_components/shopping-empty-state";
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
+import { Stagger, StaggerItem } from "@/app/_components/motion/reveal";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getOrders } from "@/lib/orders/queries";
@@ -22,16 +23,16 @@ export default async function OrdersPage() {
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1.5">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Orders</h1>
+        <h1 className="display-title text-3xl sm:text-4xl">Orders</h1>
         <p className="text-sm text-muted">Your past orders and their status.</p>
       </div>
 
       {orders.length === 0 ? (
         <ShoppingEmptyState icon="bag" message="You haven't placed any orders yet." />
       ) : (
-        <ul className="flex flex-col gap-3">
+        <Stagger as="ul" className="flex flex-col gap-3">
           {orders.map((order) => (
-            <li key={order.id}>
+            <StaggerItem as="li" key={order.id}>
               <Link
                 href={`/orders/${order.id}`}
                 className="card card-interactive group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 p-4 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:gap-x-6 sm:p-5"
@@ -57,9 +58,9 @@ export default async function OrdersPage() {
                   </svg>
                 </span>
               </Link>
-            </li>
+            </StaggerItem>
           ))}
-        </ul>
+        </Stagger>
       )}
     </div>
   );

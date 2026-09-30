@@ -4,6 +4,8 @@ import type { Metadata } from "next";
 import { pickDisplayImage } from "@/app/_components/product-image-display";
 import { ProductImageFrame } from "@/app/_components/product-image-frame";
 import { ShoppingEmptyState } from "@/app/_components/shopping-empty-state";
+import { AnimatedValue } from "@/app/_components/motion/animated-value";
+import { Reveal, Stagger, StaggerItem } from "@/app/_components/motion/reveal";
 import { requireUser } from "@/lib/auth/dal";
 import { formatPrice } from "@/lib/catalog/format";
 import { getCartSummary } from "@/lib/cart/queries";
@@ -27,14 +29,14 @@ export default async function CartPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Cart</h1>
+      <Reveal as="h1" trigger="mount" className="display-title text-3xl sm:text-4xl">Cart</Reveal>
 
       {items.length === 0 ? (
         <ShoppingEmptyState icon="bag" message="Your cart is empty." />
       ) : (
         <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
           {/* Item rows are the list's only <li>s (browser tests read them). */}
-          <ul className="card divide-y divide-border">
+          <Stagger as="ul" className="card divide-y divide-border overflow-hidden">
             {items.map((item) => {
               // The product row still exists (product_id cascades on delete,
               // so a deleted product's cart_items row would be gone too) but
@@ -47,7 +49,7 @@ export default async function CartPage() {
               if (!item.product) {
                 const label = item.unavailableProduct;
                 return (
-                  <li key={item.id} className="flex gap-4 p-4 sm:gap-5 sm:p-5">
+                  <StaggerItem as="li" glide key={item.id} className="flex gap-4 p-4 sm:gap-5 sm:p-5">
                     <ProductImageFrame
                       image={pickDisplayImage(label?.images ?? [])}
                       alt={label?.name ?? "Unavailable product"}
@@ -62,7 +64,7 @@ export default async function CartPage() {
                         <RemoveCartItemButton cartItemId={item.id} />
                       </div>
                     </div>
-                  </li>
+                  </StaggerItem>
                 );
               }
 
@@ -74,7 +76,7 @@ export default async function CartPage() {
                 item.quantity > item.product.stock;
 
               return (
-                <li key={item.id} className="flex gap-4 p-4 sm:gap-5 sm:p-5">
+                <StaggerItem as="li" glide key={item.id} className="flex gap-4 p-4 sm:gap-5 sm:p-5">
                   <ProductImageFrame
                     image={pickDisplayImage(item.product.images)}
                     alt={item.product.name}
@@ -95,7 +97,7 @@ export default async function CartPage() {
                         </p>
                       </div>
                       <p className="shrink-0 font-semibold tabular-nums">
-                        {formatPrice(Number(item.product.price) * item.quantity)}
+                        <AnimatedValue value={formatPrice(Number(item.product.price) * item.quantity)} />
                       </p>
                     </div>
 
@@ -127,21 +129,21 @@ export default async function CartPage() {
                       </div>
                     </div>
                   </div>
-                </li>
+                </StaggerItem>
               );
             })}
-          </ul>
+          </Stagger>
 
           <section
             aria-labelledby="cart-summary-heading"
-            className="card flex flex-col gap-5 p-5 sm:p-6 lg:sticky lg:top-8"
+            className="card flex flex-col gap-5 p-5 sm:p-6 lg:sticky lg:top-24"
           >
             <h2 id="cart-summary-heading" className="text-lg font-semibold tracking-tight">
               Order summary
             </h2>
             <div className="flex items-baseline justify-between gap-4 border-t border-border pt-5 text-base font-semibold">
               <span>Subtotal</span>
-              <span className="text-xl tracking-tight tabular-nums">{formatPrice(subtotal)}</span>
+              <span className="text-xl tracking-tight tabular-nums"><AnimatedValue value={formatPrice(subtotal)} /></span>
             </div>
             <div className="flex flex-col gap-3">
               <Link href="/checkout" className="btn btn-primary btn-lg w-full">

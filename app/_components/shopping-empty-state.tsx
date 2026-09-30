@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { Reveal } from "./motion/reveal";
+
 // Empty cart / empty wishlist: same message as before, plus the existing
 // storefront route back to shopping. Presentation only.
 export function ShoppingEmptyState({
@@ -10,8 +12,8 @@ export function ShoppingEmptyState({
   icon: "bag" | "heart";
 }) {
   return (
-    <div className="flex flex-col items-center gap-5 rounded-lg border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
-      <span className="flex size-12 items-center justify-center rounded-full bg-surface text-muted ring-1 ring-border">
+    <Reveal trigger="mount" scale={0.985} className="surface-glow flex flex-col items-center gap-5 rounded-xl border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
+      <span className="flex size-14 items-center justify-center rounded-2xl bg-surface text-accent shadow-[var(--shadow-card)] ring-1 ring-border">
         <svg
           aria-hidden="true"
           viewBox="0 0 24 24"
@@ -36,6 +38,6 @@ export function ShoppingEmptyState({
       <Link href="/products" className="btn btn-secondary">
         Continue shopping
       </Link>
-    </div>
+    </Reveal>
   );
 }

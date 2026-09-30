@@ -14,16 +14,16 @@ export function ProductCard({ product }: { product: ProductListItem }) {
   return (
     <Link
       href={`/products/${product.slug}`}
-      className="group flex h-full flex-col gap-3 rounded-lg focus-visible:outline-offset-4"
+      className="group flex h-full flex-col gap-3.5 rounded-lg focus-visible:outline-offset-4"
     >
       <ProductImageFrame
         image={pickDisplayImage(product.images)}
         alt={product.name}
-        className="aspect-square w-full rounded-lg ring-1 ring-inset ring-border transition-shadow duration-300 group-hover:shadow-[var(--shadow-float)]"
-        imgClassName="motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-out motion-safe:group-hover:scale-[1.03]"
+        className="product-card-media aspect-square w-full rounded-lg ring-1 ring-inset ring-border"
+        imgClassName="motion-safe:transition-transform motion-safe:duration-700 motion-safe:ease-[var(--ease-nexora)] motion-safe:group-hover:scale-[1.05]"
       />
       <div className="flex flex-1 flex-col gap-1.5 px-0.5">
-        <span className="line-clamp-2 text-sm font-medium leading-5 text-foreground decoration-foreground/40 underline-offset-4 group-hover:underline">
+        <span className="line-clamp-2 text-sm font-medium leading-5 text-foreground decoration-foreground/30 underline-offset-4 transition-colors group-hover:underline">
           {product.name}
         </span>
         {/* mt-auto: price + stock sit on a shared baseline across a grid

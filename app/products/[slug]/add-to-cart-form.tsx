@@ -1,5 +1,6 @@
 "use client";
 
+import { m } from "motion/react";
 import { useActionState, useState } from "react";
 
 import { addToCart } from "@/lib/cart/actions";
@@ -43,9 +44,17 @@ export function AddToCartForm({
           </button>
           <span
             aria-live="polite"
-            className="w-11 border-x border-input py-2 text-center text-sm font-medium tabular-nums"
+            className="w-11 overflow-hidden border-x border-input py-2 text-center text-sm font-medium tabular-nums"
           >
-            {quantity}
+            <m.span
+              key={quantity}
+              className="inline-block"
+              initial={{ y: 8, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.2 }}
+            >
+              {quantity}
+            </m.span>
           </span>
           <button
             type="button"
@@ -73,9 +82,14 @@ export function AddToCartForm({
           browser tests select `p.text-green-600`); the important
           text-success sets the actual, contrast-safe color. */}
       {state && "success" in state && (
-        <p className="text-sm text-green-600 text-success!">
+        <m.p
+          key={JSON.stringify(state)}
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-sm text-green-600 text-success!"
+        >
           {state.message ?? "Added to cart."}
-        </p>
+        </m.p>
       )}
     </form>
   );

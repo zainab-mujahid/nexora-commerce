@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { ActiveIndicator } from "@/app/_components/motion/active-indicator";
+
 // One admin section tab. The nav list itself stays in the (server) admin
 // layout; only the current-section state needs the client pathname.
 // Dashboard (/admin) is current only on itself; every other section also
@@ -17,12 +19,11 @@ export function AdminNavLink({ href, children }: { href: string; children: React
     <Link
       href={href}
       aria-current={current ? "page" : undefined}
-      className={`block border-b-2 py-3 text-sm font-medium transition-colors ${
-        current
-          ? "border-foreground text-foreground"
-          : "border-transparent text-muted hover:border-input hover:text-foreground"
+      className={`relative block border-b-2 border-transparent py-3 text-sm font-medium transition-colors ${
+        current ? "text-foreground" : "text-muted hover:border-input hover:text-foreground"
       }`}
     >
+      {current && <ActiveIndicator layoutId="admin-nav-current" className="inset-x-0 -bottom-0.5 h-0.5 rounded-full bg-foreground" />}
       {children}
     </Link>
   );

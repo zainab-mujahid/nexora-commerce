@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ProductGrid, ProductGridSkeleton } from "@/app/_components/product-grid";
+import { SectionHeader } from "@/app/_components/section-header";
 import { getActiveProducts } from "@/lib/catalog/products";
 
 const FEATURED_LIMIT = 4;
@@ -22,15 +23,16 @@ export async function FeaturedProducts() {
 
   return (
     <section className={SECTION_CLASS}>
-      <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
-        <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">
-          Featured products
-        </h2>
-        <Link href="/products" className="link-action shrink-0 text-sm">
-          View all <span aria-hidden="true">&rarr;</span>
-        </Link>
-      </div>
-      <ProductGrid products={products} />
+      <SectionHeader
+        eyebrow="Handpicked"
+        title="Featured products"
+        action={
+          <Link href="/products" className="link-action shrink-0 text-sm">
+            View all <span aria-hidden="true">&rarr;</span>
+          </Link>
+        }
+      />
+      <ProductGrid products={products} fourUp />
     </section>
   );
 }
@@ -39,9 +41,12 @@ export function FeaturedProductsSkeleton() {
   return (
     <section className={SECTION_CLASS}>
       <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
-        <div className="h-7 w-48 rounded bg-fill motion-safe:animate-pulse" />
+        <div className="flex flex-col gap-2">
+          <div className="h-4 w-24 rounded bg-fill motion-safe:animate-pulse" />
+          <div className="h-8 w-56 rounded bg-fill motion-safe:animate-pulse" />
+        </div>
       </div>
-      <ProductGridSkeleton count={4} />
+      <ProductGridSkeleton count={4} fourUp />
     </section>
   );
 }

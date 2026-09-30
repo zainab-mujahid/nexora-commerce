@@ -4,6 +4,7 @@ import { logout } from "@/lib/auth/actions";
 import { getProfile, getUser, type Profile } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
 
+import { BrandMark } from "./brand-mark";
 import { HeaderNavLink } from "./header-nav-link";
 import { HeaderSearchSlot } from "./header-search-slot";
 import { MobileMenuCloser } from "./mobile-menu-closer";
@@ -49,9 +50,13 @@ export async function SiteHeader() {
   // out on /products, which has its own search form (see HeaderSearchSlot)
   // — the fixed height keeps the header from shifting when it is.
   return (
-    <header className="border-b border-border bg-surface">
+    <header className="site-header">
       <div className="relative mx-auto flex h-15 max-w-6xl items-center gap-4 px-4 sm:px-6 min-[72rem]:gap-5">
-        <Link href="/" className="shrink-0 text-xl font-bold tracking-tight">
+        <Link
+          href="/"
+          className="group flex shrink-0 items-center gap-2.5 rounded-md text-xl font-bold tracking-tight"
+        >
+          <BrandMark className="size-7 transition-transform duration-300 ease-[var(--ease-nexora)] group-hover:-rotate-6" />
           Nexora
         </Link>
 
@@ -86,7 +91,7 @@ export async function SiteHeader() {
             </svg>
             Menu
           </summary>
-          <div className="absolute inset-x-0 top-full z-20 border-b border-border bg-surface shadow-lg">
+          <div className="menu-drop absolute inset-x-0 top-full z-20 border-b border-border bg-surface shadow-[var(--shadow-float)]">
             <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:px-6">
               <HeaderSearchSlot className="md:hidden">
                 <SearchForm className="flex" />
@@ -140,16 +145,16 @@ function CategoriesMenu({ categories }: { categories: NavCategory[] }) {
           <path d="m5.5 8 4.5 4.5L14.5 8" />
         </svg>
       </span>
-      <div className="pointer-events-none absolute left-0 top-full z-20 pt-2 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100">
+      <div className="pointer-events-none absolute left-0 top-full z-20 translate-y-1 pt-2 opacity-0 transition-[opacity,translate] duration-200 ease-[var(--ease-nexora)] group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:translate-y-0 group-has-[:focus-visible]:opacity-100">
         <ul
           aria-label="Categories"
-          className="panel-float flex min-w-48 flex-col rounded-md p-1"
+          className="panel-float flex min-w-52 flex-col p-1.5"
         >
           {categories.map((category) => (
             <li key={category.slug}>
               <Link
                 href={`/categories/${category.slug}`}
-                className="block rounded px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-fill hover:text-foreground"
+                className="flex items-center justify-between gap-3 rounded-md px-2.5 py-2 text-sm text-muted transition-colors hover:bg-fill hover:text-foreground"
               >
                 {category.name}
               </Link>

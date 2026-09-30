@@ -1,5 +1,6 @@
 "use client";
 
+import { AnimatePresence, m } from "motion/react";
 import { useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
 
 import {
@@ -297,7 +298,10 @@ export function AiShoppingAssistant({
     <>
       {showRecommendations ? (
         <section className={`flex flex-col gap-4 ${recommendationsSectionClassName}`}>
-          <h2 className="text-lg font-semibold tracking-tight">AI Recommendations</h2>
+          <div className="flex flex-col gap-2 border-b border-border pb-4">
+            <span className="eyebrow">Picked for you</span>
+            <h2 className="text-2xl font-semibold tracking-tight">AI Recommendations</h2>
+          </div>
           {/* Reuses ProductGrid/ProductCard unchanged — every rendered field
               and link comes from the authoritative product object, never
               from assistant prose. */}
@@ -330,7 +334,7 @@ export function AiShoppingAssistant({
         // (dark on the light theme, light on the dark theme). Its focus
         // outline is drawn inside the pill: the inverse --ring color would
         // barely show against the page around it.
-        className="theme-inverse fixed bottom-4 right-4 z-50 inline-flex h-11 items-center gap-2 rounded-full border border-border bg-surface pl-4 pr-5 text-sm font-medium text-foreground shadow-[var(--shadow-float)] transition-colors hover:bg-fill focus-visible:-outline-offset-4 sm:bottom-6 sm:right-6"
+        className="theme-inverse fixed bottom-4 right-4 z-50 inline-flex h-11 items-center gap-2 rounded-full border border-border bg-surface pl-4 pr-5 text-sm font-medium text-foreground shadow-[var(--shadow-float)] transition-[background-color,translate,scale] duration-200 ease-[var(--ease-nexora)] hover:-translate-y-0.5 hover:bg-fill focus-visible:-outline-offset-4 active:scale-[0.97] motion-reduce:hover:translate-y-0 sm:bottom-6 sm:right-6"
       >
         {isOpen ? (
           <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="size-4 text-muted">
@@ -346,8 +350,15 @@ export function AiShoppingAssistant({
           in this parent component, not inside this subtree — closing the
           panel unmounts only this JSX, never the state, so reopening shows
           the same session's transcript and recommendations unchanged. */}
+      <AnimatePresence>
       {isOpen && (
-        <div
+        <m.div
+          key="ai-shopping-assistant-panel"
+          initial={{ opacity: 0, y: 16, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 12, scale: 0.97, transition: { duration: 0.18 } }}
+          transition={{ duration: 0.32 }}
+          style={{ transformOrigin: "bottom right" }}
           id="ai-shopping-assistant-panel"
           role="dialog"
           aria-label="AI Shopping Assistant"
@@ -418,8 +429,11 @@ export function AiShoppingAssistant({
               )}
 
               {transcript.map((message) => (
-                <li
+                <m.li
                   key={message.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.28 }}
                   className={message.role === "user" ? "flex justify-end" : "flex justify-start"}
                 >
                   {message.role === "user" ? (
@@ -464,7 +478,7 @@ export function AiShoppingAssistant({
                       )}
                     </div>
                   )}
-                </li>
+                </m.li>
               ))}
 
               {/* Once the first chunk arrives, the reply itself replaces the
@@ -473,7 +487,12 @@ export function AiShoppingAssistant({
                   the status region below). The small dot only marks "still
                   generating"; the text appears as fast as the server sends it. */}
               {isPending && streamingText && (
-                <li className="flex justify-start">
+                <m.li
+                  className="flex justify-start"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
                   <div
                     aria-busy="true"
                     className="max-w-[90%] rounded-lg rounded-bl-sm bg-fill px-3.5 py-2.5 text-sm leading-relaxed [overflow-wrap:anywhere]"
@@ -486,7 +505,7 @@ export function AiShoppingAssistant({
                       />
                     </p>
                   </div>
-                </li>
+                </m.li>
               )}
 
               {isPending && !streamingText && (
@@ -564,8 +583,9 @@ export function AiShoppingAssistant({
               Enter to send · Shift + Enter for a new line
             </p>
           </form>
-        </div>
+        </m.div>
       )}
+      </AnimatePresence>
     </>
   );
 }

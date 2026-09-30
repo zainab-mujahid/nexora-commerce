@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
+import { Reveal } from "@/app/_components/motion/reveal";
 import { requireUser } from "@/lib/auth/dal";
 import { getAddresses } from "@/lib/addresses/queries";
 import { getCartSummary } from "@/lib/cart/queries";
@@ -26,7 +27,7 @@ export default async function CheckoutPage() {
     return (
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
         <CheckoutHeading />
-        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
+        <div className="surface-glow flex flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
           <p className="font-medium">Your cart is empty</p>
           <p className="max-w-sm text-sm text-muted">Add items to your cart before checking out.</p>
           <Link href="/products" className="btn btn-secondary mt-2">
@@ -85,11 +86,11 @@ export default async function CheckoutPage() {
 // holds no state of its own to lose).
 function CheckoutHeading() {
   return (
-    <div className="flex flex-col gap-3">
+    <Reveal trigger="mount" className="flex flex-col gap-3">
       <Link href="/cart" className="nav-link inline-flex w-fit items-center gap-1.5 text-sm">
         <span aria-hidden="true">&larr;</span> Back to cart
       </Link>
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Checkout</h1>
-    </div>
+      <h1 className="display-title text-3xl sm:text-4xl">Checkout</h1>
+    </Reveal>
   );
 }

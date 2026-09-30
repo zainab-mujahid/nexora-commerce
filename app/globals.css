@@ -39,7 +39,15 @@
   --warning: #92400e;
   --danger: #b91c1c;
   --info: #1d4ed8;
-  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05);
+  /* Nexora's signature accent: a deep champagne gold that picks up the
+     warm tones in the hero artwork. Brand moments only (logo mark, eyebrow
+     labels, small highlights) — controls and states stay monochrome.
+     >= 4.5:1 on background/surface. */
+  --accent: #8a5a12;
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 1px rgb(16 24 40 / 0.02);
+  /* Hover/raised surfaces: a soft, wide shadow rather than a heavy one. */
+  --shadow-raised: 0 10px 28px -12px rgb(16 24 40 / 0.2), 0 2px 6px -2px rgb(16 24 40 / 0.06);
   --shadow-float: 0 12px 32px -8px rgb(16 24 40 / 0.18), 0 2px 6px rgb(16 24 40 / 0.06);
   color-scheme: light;
 }
@@ -65,7 +73,10 @@
   --warning: #fbbf24;
   --danger: #f87171;
   --info: #60a5fa;
+  --accent: #e2b86b;
+  --accent-soft: color-mix(in oklab, var(--accent) 12%, var(--surface));
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-raised: 0 14px 32px -12px rgb(0 0 0 / 0.7), 0 2px 6px -2px rgb(0 0 0 / 0.4);
   --shadow-float: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
   color-scheme: dark;
 }
@@ -96,13 +107,23 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-info: var(--info);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-/* One radius for cards and controls alike (8px); pills/badges use full. */
+/* Radius scale: controls (buttons, inputs) 8px; cards, media and panels
+   12px (rounded-lg); feature surfaces 16–20px (rounded-xl / rounded-2xl).
+   Pills and badges use full. */
 @theme {
   --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  /* Shared motion easing for CSS transitions (matches the Framer Motion
+     "nexora" ease in app/_components/motion/tokens.ts). */
+  --ease-nexora: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @layer base {
@@ -118,6 +139,11 @@
   ::placeholder {
     color: var(--subtle);
     opacity: 1;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 28%, transparent);
+    color: var(--foreground);
   }
 
   input[type="checkbox"],
@@ -148,8 +174,19 @@
     line-height: var(--text-sm--line-height);
     font-weight: 500;
     white-space: nowrap;
-    transition: background-color 150ms, border-color 150ms, color 150ms, opacity 150ms;
+    transition:
+      background-color 150ms,
+      border-color 150ms,
+      color 150ms,
+      opacity 150ms,
+      box-shadow 200ms var(--ease-nexora),
+      transform 160ms var(--ease-nexora);
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Tactile press: a small, quick scale-down on every enabled button. */
+  .btn:not(:disabled):not([aria-disabled="true"]):active {
+    transform: scale(0.98);
   }
   .btn:disabled,
   .btn[aria-disabled="true"] {
@@ -172,6 +209,7 @@
   }
   .btn-primary:not(:disabled):hover {
     background: color-mix(in oklab, var(--foreground) 85%, var(--background));
+    box-shadow: 0 6px 16px -8px color-mix(in oklab, var(--foreground) 55%, transparent);
   }
   .btn-secondary {
     background: var(--surface);
@@ -180,6 +218,7 @@
   }
   .btn-secondary:not(:disabled):hover {
     background: var(--fill);
+    border-color: color-mix(in oklab, var(--foreground) 45%, var(--input));
   }
   .btn-danger {
     background: var(--surface);
@@ -259,19 +298,29 @@
   /* ---- Surfaces ---- */
   .card {
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: var(--surface);
     box-shadow: var(--shadow-card);
   }
   .card-interactive {
-    transition: border-color 150ms, box-shadow 150ms;
+    transition:
+      border-color 200ms,
+      box-shadow 300ms var(--ease-nexora),
+      transform 300ms var(--ease-nexora);
   }
   .card-interactive:hover {
     border-color: color-mix(in oklab, var(--input) 70%, var(--border));
-    box-shadow: 0 4px 12px -4px rgb(16 24 40 / 0.12);
+    box-shadow: var(--shadow-raised);
+    transform: translateY(-2px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card-interactive:hover {
+      transform: none;
+    }
   }
   .panel-float {
     border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
     background: var(--surface);
     box-shadow: var(--shadow-float);
   }
@@ -308,7 +357,7 @@
   .table-wrap {
     overflow-x: auto;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: var(--surface);
     box-shadow: var(--shadow-card);
   }
@@ -343,6 +392,99 @@
     background: color-mix(in oklab, var(--fill) 60%, transparent);
   }
 
+  /* ---- Typography helpers ---- */
+  /* Small uppercase label above a section/page title. The leading mark is
+     the one place the brand accent appears in running layout. */
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .eyebrow::before {
+    content: "";
+    width: 1rem;
+    height: 1px;
+    background: var(--accent);
+  }
+  .display-title {
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    text-wrap: balance;
+  }
+
+  /* ---- Site header ---- */
+  /* Sticky, lightly frosted bar: the page scrolls beneath a translucent
+     surface with a hairline edge. Falls back to the solid surface where
+     backdrop-filter isn't supported. */
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  @supports (backdrop-filter: blur(1px)) {
+    .site-header {
+      background: color-mix(in oklab, var(--surface) 82%, transparent);
+      backdrop-filter: saturate(1.4) blur(14px);
+    }
+  }
+  /* Mobile <details> menu and the desktop Categories dropdown: a short
+     drop-in when they open (CSS only; they work without JS). */
+  .menu-drop {
+    transform-origin: top center;
+  }
+  details[open] > .menu-drop {
+    animation: menu-drop-in 220ms var(--ease-nexora);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    details[open] > .menu-drop {
+      animation: none;
+    }
+  }
+
+  /* ---- Decorative surfaces ---- */
+  /* A faint engineering grid that fades out toward the edges — used behind
+     the auth card and page intros for depth without imagery. */
+  .surface-grid {
+    --grid-line: color-mix(in oklab, var(--foreground) 5%, transparent);
+    background-image:
+      linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(60% 55% at 50% 40%, #000 20%, transparent 75%);
+  }
+  /* Soft top glow in the accent + info tones behind a page intro. */
+  .surface-glow {
+    background:
+      radial-gradient(40% 60% at 15% 0%, color-mix(in oklab, var(--accent) 9%, transparent), transparent 70%),
+      radial-gradient(45% 60% at 85% 0%, color-mix(in oklab, var(--info) 7%, transparent), transparent 70%);
+  }
+
+  /* ---- Storefront product card ---- */
+  /* Lift + deeper shadow on the image frame while the card is hovered. */
+  .product-card-media {
+    transition:
+      box-shadow 400ms var(--ease-nexora),
+      transform 400ms var(--ease-nexora);
+  }
+  .group:hover > .product-card-media {
+    box-shadow: var(--shadow-raised);
+    transform: translateY(-3px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .group:hover > .product-card-media {
+      transform: none;
+    }
+  }
+
   /* ---- Verification code slots (password recovery) ---- */
   /* The caret drawn in the active empty slot of <CodeInput>; the real input
      is invisible, so this stands in for its native caret. */
@@ -367,7 +509,7 @@
   /* ---- Empty state / skeleton ---- */
   .empty-state {
     border: 1px dashed color-mix(in oklab, var(--input) 60%, var(--border));
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: color-mix(in oklab, var(--fill) 50%, transparent);
   }
   .skeleton {
@@ -612,6 +754,18 @@
     .data-table-stack td.cell-actions:empty {
       display: none;
     }
+  }
+}
+
+/* Header menus (see .menu-drop). */
+@keyframes menu-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

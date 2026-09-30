@@ -1,24 +1,37 @@
 import type { ProductListItem } from "@/lib/catalog/types";
 
+import { Stagger, StaggerItem } from "./motion/reveal";
 import { ProductCard } from "./product-card";
 
 // Shared by the grid and its skeleton so loading and loaded layouts match.
 const GRID_CLASS =
   "grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 sm:gap-x-6 sm:gap-y-10 lg:grid-cols-4";
+// For a fixed row of four (the homepage's featured products): stays 2-up
+// until lg, so tablet widths show 2 x 2 instead of three plus one orphan.
+const GRID_CLASS_FOUR_UP =
+  "grid grid-cols-2 gap-x-4 gap-y-8 sm:gap-x-6 sm:gap-y-10 lg:grid-cols-4";
 
-export function ProductGrid({ products }: { products: ProductListItem[] }) {
+export function ProductGrid({
+  products,
+  fourUp = false,
+}: {
+  products: ProductListItem[];
+  fourUp?: boolean;
+}) {
   return (
-    <div className={GRID_CLASS}>
+    <Stagger className={fourUp ? GRID_CLASS_FOUR_UP : GRID_CLASS}>
       {products.map((product) => (
-        <ProductCard key={product.id} product={product} />
+        <StaggerItem key={product.id} className="h-full">
+          <ProductCard product={product} />
+        </StaggerItem>
       ))}
-    </div>
+    </Stagger>
   );
 }
 
-export function ProductGridSkeleton({ count = 8 }: { count?: number }) {
+export function ProductGridSkeleton({ count = 8, fourUp = false }: { count?: number; fourUp?: boolean }) {
   return (
-    <div className={GRID_CLASS} aria-hidden="true">
+    <div className={fourUp ? GRID_CLASS_FOUR_UP : GRID_CLASS} aria-hidden="true">
       {Array.from({ length: count }, (_, i) => (
         <div key={i} className="flex flex-col gap-3 motion-safe:animate-pulse">
           <div className="aspect-square rounded-lg bg-fill" />

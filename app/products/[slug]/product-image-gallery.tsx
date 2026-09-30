@@ -1,6 +1,10 @@
 "use client";
 
+import { AnimatePresence, m } from "motion/react";
 import { useState } from "react";
+
+import { ActiveIndicator } from "@/app/_components/motion/active-indicator";
+import { DURATION, EASE } from "@/app/_components/motion/tokens";
 
 import { ProductImageFrame } from "@/app/_components/product-image-frame";
 import { pickDisplayImage } from "@/app/_components/product-image-display";
@@ -23,7 +27,7 @@ export function ProductImageGallery({
   const initial = pickDisplayImage(images);
   const [selectedId, setSelectedId] = useState(initial?.id ?? null);
 
-  const frame = "aspect-square w-full rounded-xl ring-1 ring-inset ring-border";
+  const frame = "aspect-square w-full rounded-2xl ring-1 ring-inset ring-border";
 
   if (images.length === 0 || !initial) {
     return <ProductImageFrame image={null} alt={alt} className={`${frame} ${className}`} />;
@@ -33,7 +37,22 @@ export function ProductImageGallery({
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
-      <ProductImageFrame key={selected.id} image={selected} alt={alt} fit="contain" className={frame} />
+      {/* The previous image fades out over the new one (both absolutely
+          stacked in one frame), so switching thumbnails never flashes. */}
+      <div className={`relative overflow-hidden bg-fill ${frame}`}>
+        <AnimatePresence initial={false}>
+          <m.div
+            key={selected.id}
+            className="absolute inset-0"
+            initial={{ opacity: 0, scale: 1.015 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: DURATION.base, ease: EASE }}
+          >
+            <ProductImageFrame image={selected} alt={alt} fit="contain" className="size-full" />
+          </m.div>
+        </AnimatePresence>
+      </div>
 
       {images.length > 1 && (
         <div className="-mx-1 flex gap-2 overflow-x-auto px-1 py-1">
@@ -46,13 +65,14 @@ export function ProductImageGallery({
                 onClick={() => setSelectedId(image.id)}
                 aria-pressed={isSelected}
                 aria-label={image.alt_text || alt}
-                className={`size-16 shrink-0 overflow-hidden rounded-lg transition-shadow sm:size-20 ${
-                  isSelected
-                    ? "ring-2 ring-foreground ring-offset-2 ring-offset-background"
-                    : "ring-1 ring-border hover:ring-input"
+                className={`relative size-16 shrink-0 rounded-lg p-0.5 transition-opacity sm:size-20 ${
+                  isSelected ? "" : "opacity-75 hover:opacity-100"
                 }`}
               >
-                <ProductImageFrame image={image} alt="" className="size-full" />
+                {isSelected && (
+                  <ActiveIndicator layoutId="gallery-thumb" className="inset-0 rounded-[0.875rem] ring-2 ring-foreground" />
+                )}
+                <ProductImageFrame image={image} alt="" className="size-full rounded-[0.625rem] ring-1 ring-inset ring-border" />
               </button>
             );
           })}

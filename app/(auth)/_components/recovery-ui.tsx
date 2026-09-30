@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { StepFill } from "./step-fill";
+
 // Shared chrome for the password recovery screens (/forgot-password and
 // /reset-password): a three-step progress indicator and a consistent header.
 
@@ -20,12 +22,9 @@ export function RecoverySteps({ current }: { current: number }) {
             aria-current={active ? "step" : undefined}
             className="flex min-w-0 flex-col gap-1.5"
           >
-            <span
-              aria-hidden="true"
-              className={`h-1 rounded-full transition-colors ${
-                done || active ? "bg-foreground" : "bg-border"
-              }`}
-            />
+            <span aria-hidden="true" className="relative h-1 overflow-hidden rounded-full bg-border">
+              {(done || active) && <StepFill animate={active} />}
+            </span>
             <span
               className={`truncate text-[0.6875rem] font-medium tracking-wide uppercase ${
                 active ? "text-foreground" : "text-subtle"

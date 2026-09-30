@@ -2,7 +2,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 // Dashboard section card. Keeps `rounded-md border` on the link (existing
-// browser tests locate dashboard cards by `main a.rounded-md.border`).
+// browser tests locate dashboard cards by `main a.rounded-md.border`);
+// rounded-lg! gives it the same 12px radius as every other card.
 export function EntryCard({
   href,
   title,
@@ -17,7 +18,7 @@ export function EntryCard({
   return (
     <Link
       href={href}
-      className="card card-interactive group flex flex-col gap-4 rounded-md border p-5"
+      className="card card-interactive group flex h-full flex-col gap-4 rounded-md rounded-lg! border p-5"
     >
       <span className="flex items-center justify-between">
         <span aria-hidden="true" className="flex size-9 items-center justify-center rounded-md bg-fill text-muted transition-colors group-hover:bg-foreground group-hover:text-background">

@@ -19,7 +19,7 @@ export default async function AccountPage() {
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1.5">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Account</h1>
+        <h1 className="display-title text-3xl sm:text-4xl">Account</h1>
         <p className="text-sm text-muted">
           Manage your profile details.
         </p>

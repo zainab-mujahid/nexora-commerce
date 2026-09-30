@@ -36,7 +36,7 @@ export default async function OrderDetailPage({
         </Link>
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           <div className="flex flex-col gap-1.5">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Order details</h1>
+            <h1 className="display-title text-3xl sm:text-4xl">Order details</h1>
             <p className="text-sm text-muted">
               Order #{order.id.slice(0, 8)} &middot;{" "}
               <span className="tabular-nums">{new Date(order.created_at).toLocaleDateString()}</span>

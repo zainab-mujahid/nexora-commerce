@@ -105,7 +105,7 @@ export function CheckoutForm({
 
       <section
         aria-labelledby="checkout-summary-heading"
-        className="card flex flex-col gap-5 p-5 sm:p-6 lg:sticky lg:top-8"
+        className="card flex flex-col gap-5 p-5 sm:p-6 lg:sticky lg:top-24"
       >
         <h2 id="checkout-summary-heading" className="text-lg font-semibold tracking-tight">
           Order summary

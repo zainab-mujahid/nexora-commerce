@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 
 import { CatalogEmptyState } from "@/app/_components/catalog-empty-state";
 import { ProductGrid } from "@/app/_components/product-grid";
+import { Reveal } from "@/app/_components/motion/reveal";
 import { getProductsByCategory } from "@/lib/catalog/products";
 
 export async function generateMetadata({
@@ -29,7 +30,7 @@ export default async function CategoryPage({
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
-      <div className="flex flex-col gap-3 border-b border-border pb-6">
+      <Reveal trigger="mount" className="flex flex-col gap-3 border-b border-border pb-6">
         <nav aria-label="Breadcrumb" className="text-sm text-muted">
           <Link href="/products" className="nav-link">
             Shop
@@ -37,7 +38,7 @@ export default async function CategoryPage({
           <span aria-hidden="true" className="px-2 text-subtle">/</span>
           <span aria-current="page" className="text-foreground">{category.name}</span>
         </nav>
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+        <h1 className="display-title text-4xl sm:text-5xl">
           {category.name}
         </h1>
         {category.description && (
@@ -48,7 +49,7 @@ export default async function CategoryPage({
             {products.length} product{products.length === 1 ? "" : "s"}
           </p>
         )}
-      </div>
+      </Reveal>
 
       {products.length === 0 ? (
         <CatalogEmptyState message="No products in this category yet." />

@@ -1,5 +1,6 @@
 import { cache } from "react";
 
+import { adminResourceIdSchema } from "@/lib/admin/schemas";
 import { createClient } from "@/lib/supabase/server";
 
 import type { Category } from "./types";
@@ -49,6 +50,10 @@ export const getCategoryBySlug = cache(
 // itself is one of the editable fields.
 export const getCategoryById = cache(
   async (id: string): Promise<Category | null> => {
+    // Malformed URL id -> null (the page's notFound()), never a uuid-syntax
+    // error from Postgres. See getAdminProductById in ./products.
+    if (!adminResourceIdSchema.safeParse(id).success) return null;
+
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("categories")

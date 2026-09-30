@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
+import { Stagger, StaggerItem } from "@/app/_components/motion/reveal";
 import { requireUser } from "@/lib/auth/dal";
 import { getAddresses } from "@/lib/addresses/queries";
 
@@ -23,7 +24,7 @@ export default async function AddressesPage() {
     <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-1.5">
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Addresses</h1>
+          <h1 className="display-title text-3xl sm:text-4xl">Addresses</h1>
           <p className="text-sm text-muted">
             Manage the addresses used for delivery.
           </p>
@@ -37,8 +38,8 @@ export default async function AddressesPage() {
       </div>
 
       {addresses.length === 0 ? (
-        <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
-          <span aria-hidden="true" className="flex size-12 items-center justify-center rounded-full bg-surface text-muted ring-1 ring-border">
+        <div className="surface-glow flex flex-col items-center gap-4 rounded-xl border border-dashed border-border bg-fill/40 px-6 py-16 text-center">
+          <span aria-hidden="true" className="flex size-14 items-center justify-center rounded-2xl bg-surface text-accent shadow-[var(--shadow-card)] ring-1 ring-border">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-5">
               <path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21Z" />
               <circle cx="12" cy="9.5" r="2.5" />
@@ -47,9 +48,9 @@ export default async function AddressesPage() {
           <p className="max-w-sm text-sm text-muted">You haven&apos;t added any addresses yet.</p>
         </div>
       ) : (
-        <ul className="grid gap-4 md:grid-cols-2">
+        <Stagger as="ul" className="grid gap-4 md:grid-cols-2">
           {addresses.map((address) => (
-            <li
+            <StaggerItem as="li"
               key={address.id}
               className={`card flex flex-col text-sm ${address.is_default ? "border-input" : ""}`}
             >
@@ -88,9 +89,9 @@ export default async function AddressesPage() {
                   <DeleteAddressButton addressId={address.id} />
                 </div>
               </div>
-            </li>
+            </StaggerItem>
           ))}
-        </ul>
+        </Stagger>
       )}
     </div>
   );
