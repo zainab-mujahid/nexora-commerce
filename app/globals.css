@@ -343,6 +343,27 @@
     background: color-mix(in oklab, var(--fill) 60%, transparent);
   }
 
+  /* ---- Verification code slots (password recovery) ---- */
+  /* The caret drawn in the active empty slot of <CodeInput>; the real input
+     is invisible, so this stands in for its native caret. */
+  .code-caret {
+    width: 1.5px;
+    height: 1.5rem;
+    border-radius: 1px;
+    background: var(--foreground);
+    animation: code-caret-blink 1.1s steps(1) infinite;
+  }
+  @keyframes code-caret-blink {
+    50% {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .code-caret {
+      animation: none;
+    }
+  }
+
   /* ---- Empty state / skeleton ---- */
   .empty-state {
     border: 1px dashed color-mix(in oklab, var(--input) 60%, var(--border));

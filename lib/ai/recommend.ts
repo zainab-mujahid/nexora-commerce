@@ -5,11 +5,12 @@ import * as z from "zod";
 
 import { formatPrice } from "@/lib/catalog/format";
 
-import { generateStructuredJson } from "./client";
+import { generateStructuredJson, generateStructuredJsonStream } from "./client";
 import { AiInvalidResponseError } from "./errors";
 import { logAiEvent } from "./log";
 import type { SemanticProductSearchResult } from "./retrieval";
 import type { PriceReference } from "./search";
+import { createMessageDeltaReader } from "./stream-message";
 
 const MAX_USER_REQUEST_LENGTH = 500;
 // Mirrors lib/ai/retrieval.ts's own MAX_MATCH_COUNT ceiling — defense in
@@ -231,6 +232,14 @@ export async function generateGroundedRecommendation(params: {
   // `products` because the customer asked for something different. Adds
   // only a fixed sentence — never product ids or names — to the prompt.
   alternativesExcluded?: boolean;
+  // Optional streaming (the shopping assistant's chat UI). When present, the
+  // same request is made with Gemini's streaming API and `onMessageDelta`
+  // receives the "message" text as it is generated — display-only text, read
+  // out of the still-incomplete JSON. Nothing else changes: the prompt,
+  // schema, output limit, and every validation/allowlist check below run on
+  // the complete response exactly as without streaming, and only that
+  // validated result is returned.
+  stream?: { onMessageDelta: (delta: string) => void; signal?: AbortSignal };
 }): Promise<GroundedRecommendationResult> {
   const trimmedRequest = params.userRequest.trim();
 
@@ -276,13 +285,20 @@ ${trimmedRequest}`;
 
   let raw: unknown;
   try {
-    raw = await generateStructuredJson({
+    const request = {
       systemInstruction: SYSTEM_INSTRUCTION,
       contents,
       responseSchema: GEMINI_RECOMMENDATION_RESPONSE_SCHEMA,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       operation: "recommendation_generation",
-    });
+    } as const;
+    raw = params.stream
+      ? await generateStructuredJsonStream({
+          ...request,
+          onTextChunk: createMessageDeltaReader(params.stream.onMessageDelta, MAX_MESSAGE_LENGTH),
+          signal: params.stream.signal,
+        })
+      : await generateStructuredJson(request);
   } catch (err) {
     // Step 22 Phase 8F: no console.error here — see the matching comment in
     // lib/ai/intent.ts's extractShoppingIntent() (generateStructuredJson()

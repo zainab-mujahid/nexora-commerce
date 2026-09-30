@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
 
-import { askShoppingAssistant, type AssistantTurnResult } from "@/lib/ai/actions";
+import {
+  askShoppingAssistant,
+  type AssistantStreamEvent,
+  type AssistantTurnResult,
+} from "@/lib/ai/actions";
 import type { ShoppingContext } from "@/lib/ai/context";
 import type { SemanticProductSearchResult } from "@/lib/ai/retrieval";
 
@@ -11,6 +15,17 @@ import { ProductGrid } from "./product-grid";
 // Mirrors lib/ai/actions.ts's own bound — UX only. The Server Action
 // re-validates this itself and is the actual enforcement point.
 const MAX_INPUT_LENGTH = 500;
+
+// Client-side only: the reply stream broke off (connection lost, server
+// restarted) before its final validated result arrived, or the action call
+// itself failed. Same tone as lib/ai/actions.ts's own safe messages.
+const INTERRUPTED_MESSAGE =
+  "The response was interrupted before it finished. Please try again.";
+
+// How close (px) to the bottom of the conversation counts as "following it":
+// streamed text keeps the view pinned there, but never drags someone who
+// scrolled up to reread an earlier answer.
+const STICK_TO_BOTTOM_THRESHOLD = 48;
 
 type Recommendation = { product: SemanticProductSearchResult; reason: string };
 
@@ -107,8 +122,30 @@ export function AiShoppingAssistant({
   const [isOpen, setIsOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [isPending, startTransition] = useTransition();
-  const messagesEndRef = useRef<HTMLLIElement>(null);
+  // The in-progress reply's text as it streams in (display-only — see
+  // AssistantStreamEvent in lib/ai/actions.ts). "" until the first chunk.
+  const [streamingText, setStreamingText] = useState("");
+  // Final reply text for screen readers, announced once per turn — the
+  // streaming bubble itself isn't a live region, so partial chunks are
+  // never read out one by one.
+  const [announcement, setAnnouncement] = useState("");
+  // Identifies the one turn allowed to update the UI; chunks from any other
+  // (e.g. after unmount) are ignored.
+  const activeTurnRef = useRef<string | null>(null);
+  const readerRef = useRef<ReadableStreamDefaultReader<AssistantStreamEvent> | null>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Leaving the page mid-reply: stop reading, which lets the server cancel
+  // the Gemini request it no longer needs.
+  useEffect(
+    () => () => {
+      activeTurnRef.current = null;
+      readerRef.current?.cancel().catch(() => {});
+    },
+    [],
+  );
 
   // Same-route navigations (/products?category=… soft navigations) re-render
   // this instance with new `children` but keep all of its state, so without
@@ -139,13 +176,15 @@ export function AiShoppingAssistant({
 
   const showRecommendations = recommendations.length > 0 && !viewAllProducts;
 
-  // Auto-scrolls the message area to the newest turn, including the
-  // transient loading-dots bubble — scrollIntoView targets the nearest
-  // scrollable ancestor, which is the overflow-y-auto message list below,
-  // not the page itself.
+  // Keeps the message area at the newest turn — including the loading-dots
+  // bubble and a reply as it streams in — while the customer is following
+  // along at the bottom. Scrolls only the overflow-y-auto message list, never
+  // the page, and jumps instantly (a smooth scroll restarted on every chunk
+  // would lag and judder).
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [transcript, isPending]);
+    const area = scrollAreaRef.current;
+    if (area && stickToBottomRef.current) area.scrollTop = area.scrollHeight;
+  }, [transcript, isPending, streamingText, isOpen]);
 
   // Grows the prompt textarea to fit its wrapped text (CSS max-h-32 caps it,
   // after which it scrolls), and shrinks it back once the prompt is cleared
@@ -166,14 +205,36 @@ export function AiShoppingAssistant({
 
     setInputValue("");
     setTranscript((prev) => [...prev, { role: "user", id: crypto.randomUUID(), text }]);
+    setStreamingText("");
+    stickToBottomRef.current = true;
 
+    const turnId = crypto.randomUUID();
+    activeTurnRef.current = turnId;
+
+    // The whole turn, stream included, runs inside this transition, so
+    // isPending (disabled composer, no duplicate submit) lasts until the
+    // final result — not just until the action call returns its stream.
     startTransition(async () => {
-      // Exactly one call per turn, sending only this turn's text plus the
-      // last ShoppingContext this component holds — no prior transcript is
-      // ever sent back to the pipeline or to Gemini. `shoppingContext` is
-      // whatever the server itself returned last time (or null, on the
-      // first turn) — never edited or derived locally.
-      const result = await askShoppingAssistant(text, shoppingContext);
+      let result: AssistantTurnResult;
+      try {
+        // Exactly one call per turn, sending only this turn's text plus the
+        // last ShoppingContext this component holds — no prior transcript is
+        // ever sent back to the pipeline or to Gemini. `shoppingContext` is
+        // whatever the server itself returned last time (or null, on the
+        // first turn) — never edited or derived locally.
+        const response = await askShoppingAssistant(text, shoppingContext);
+        result =
+          response.status === "streaming"
+            ? await readTurnStream(response.events, turnId)
+            : response;
+      } catch {
+        result = { status: "error", error: INTERRUPTED_MESSAGE };
+      }
+
+      if (activeTurnRef.current !== turnId) return;
+      activeTurnRef.current = null;
+      setStreamingText("");
+      setAnnouncement(result.status === "error" ? result.error : result.message);
 
       // Storefront "AI Recommendations" section update rule:
       // - "ok": replace with this turn's verified recommendations and show
@@ -206,6 +267,30 @@ export function AiShoppingAssistant({
 
       setTranscript((prev) => [...prev, toAssistantMessage(crypto.randomUUID(), result)]);
     });
+  }
+
+  // Reads one turn's events: appends each delta to the in-progress bubble
+  // (one render per chunk as the server sends it — no artificial pacing) and
+  // returns the final validated result. A stream that ends or breaks before
+  // its result is an interrupted turn; whatever partial text arrived is
+  // discarded along with it, never kept as an answer.
+  async function readTurnStream(
+    events: ReadableStream<AssistantStreamEvent>,
+    turnId: string,
+  ): Promise<AssistantTurnResult> {
+    const reader = events.getReader();
+    readerRef.current = reader;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || activeTurnRef.current !== turnId) break;
+        if (value.type === "result") return value.result;
+        setStreamingText((prev) => prev + value.text);
+      }
+    } finally {
+      if (readerRef.current === reader) readerRef.current = null;
+    }
+    return { status: "error", error: INTERRUPTED_MESSAGE };
   }
 
   return (
@@ -300,7 +385,15 @@ export function AiShoppingAssistant({
 
           {/* overscroll-contain: scrolling the conversation to its end never
               carries on into the page behind the panel. */}
-          <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+          <div
+            ref={scrollAreaRef}
+            onScroll={(event) => {
+              const area = event.currentTarget;
+              stickToBottomRef.current =
+                area.scrollHeight - area.scrollTop - area.clientHeight < STICK_TO_BOTTOM_THRESHOLD;
+            }}
+            className="flex-1 overflow-y-auto overscroll-contain px-4 py-4"
+          >
             <ul className="flex flex-col gap-4">
               {transcript.length === 0 && (
                 <li className="flex flex-col gap-3 text-sm">
@@ -374,7 +467,29 @@ export function AiShoppingAssistant({
                 </li>
               ))}
 
-              {isPending && (
+              {/* Once the first chunk arrives, the reply itself replaces the
+                  loading dots: same bubble as a finished reply, marked busy
+                  and not a live region (the final text is announced once, via
+                  the status region below). The small dot only marks "still
+                  generating"; the text appears as fast as the server sends it. */}
+              {isPending && streamingText && (
+                <li className="flex justify-start">
+                  <div
+                    aria-busy="true"
+                    className="max-w-[90%] rounded-lg rounded-bl-sm bg-fill px-3.5 py-2.5 text-sm leading-relaxed [overflow-wrap:anywhere]"
+                  >
+                    <p>
+                      {streamingText}
+                      <span
+                        aria-hidden="true"
+                        className="ml-1 inline-block size-1.5 -translate-y-px animate-pulse rounded-full bg-current align-middle opacity-60 motion-reduce:animate-none"
+                      />
+                    </p>
+                  </div>
+                </li>
+              )}
+
+              {isPending && !streamingText && (
                 <li className="flex justify-start">
                   <div
                     role="status"
@@ -402,8 +517,10 @@ export function AiShoppingAssistant({
                 </li>
               )}
 
-              <li ref={messagesEndRef} aria-hidden="true" />
             </ul>
+            <p role="status" className="sr-only">
+              {announcement}
+            </p>
           </div>
 
           <form onSubmit={handleSubmit} className="shrink-0 border-t border-border p-3">

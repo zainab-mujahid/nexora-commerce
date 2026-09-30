@@ -54,9 +54,14 @@ export type ShoppingAssistantResponse =
 // failure) — same controlled-failure contract as the functions it calls.
 // Never fabricates a recommendation and never falls back to an ungrounded
 // answer if grounded generation fails.
+//
+// `stream` (optional) is passed straight to generateGroundedRecommendation()
+// so the chat UI can show the reply while it's generated; retrieval,
+// grounding, validation and the returned value are identical either way.
 export async function getShoppingAssistantResponse(
   userInput: string,
   previousContext: ShoppingContext | null = null,
+  stream?: { onMessageDelta: (delta: string) => void; signal?: AbortSignal },
 ): Promise<ShoppingAssistantResponse> {
   const safePreviousContext = previousContext
     ? (shoppingContextSchema.safeParse(previousContext).data ?? null)
@@ -84,6 +89,7 @@ export async function getShoppingAssistantResponse(
     products,
     priceReference,
     alternativesExcluded,
+    stream,
   });
 
   // The updated context's recommendedProductIds contains ONLY ids that

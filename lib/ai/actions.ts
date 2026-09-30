@@ -83,6 +83,27 @@ export type AssistantTurnResult =
   | { status: "no_results"; message: string; context: ShoppingContext }
   | { status: "error"; error: string };
 
+// Streaming delivery of one turn. After the cheap input checks and the rate
+// limit (both still answered with a plain AssistantTurnResult, exactly as
+// before), the action returns `events`: zero or more "delta" events carrying
+// the assistant's reply text as Gemini generates it, then exactly one
+// "result" event carrying the same AssistantTurnResult this action
+// previously returned in one piece, then the stream closes.
+//
+// Only the "result" event is the answer. Delta text is display-only: it is
+// read out of the still-incomplete model output, before validation — the
+// final result's message replaces it, and a failed validation turns the
+// turn into status "error" (the client discards the streamed text). Product
+// recommendations and context only ever arrive in the result, after
+// recommend.ts's unchanged Zod validation and candidate-id allowlist.
+export type AssistantStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "result"; result: AssistantTurnResult };
+
+export type AssistantResponse =
+  | AssistantTurnResult
+  | { status: "streaming"; events: ReadableStream<AssistantStreamEvent> };
+
 // The one server boundary the client-side chat UI calls (see
 // app/_components/ai-shopping-assistant.tsx, mounted on both / and
 // /products) — invoked directly from a client event handler wrapped in
@@ -112,7 +133,7 @@ export type AssistantTurnResult =
 export async function askShoppingAssistant(
   input: unknown,
   previousContext: unknown,
-): Promise<AssistantTurnResult> {
+): Promise<AssistantResponse> {
   if (typeof input !== "string") {
     return { status: "error", error: "Please enter a shopping request." };
   }
@@ -184,8 +205,49 @@ export async function askShoppingAssistant(
   const safePreviousContext: ShoppingContext | null =
     previousContext == null ? null : (shoppingContextSchema.safeParse(previousContext).data ?? null);
 
+  // Everything from here on (retrieval, grounding, generation, validation)
+  // runs inside the stream, so the reply can be delivered as it's generated.
+  // cancel() fires if the customer's browser goes away mid-turn; aborting
+  // stops the Gemini request instead of paying for output nobody will read.
+  const abort = new AbortController();
+  const events = new ReadableStream<AssistantStreamEvent>({
+    async start(controller) {
+      const send = (event: AssistantStreamEvent) => {
+        if (abort.signal.aborted) return;
+        try {
+          controller.enqueue(event);
+        } catch {
+          // The stream was already cancelled — nothing left to deliver to.
+        }
+      };
+
+      const result = await runAssistantTurn(trimmed, safePreviousContext, start, {
+        onMessageDelta: (text) => send({ type: "delta", text }),
+        signal: abort.signal,
+      });
+
+      send({ type: "result", result });
+      if (!abort.signal.aborted) controller.close();
+    },
+    cancel() {
+      abort.abort();
+    },
+  });
+
+  return { status: "streaming", events };
+}
+
+// The pipeline half of a turn, unchanged from when askShoppingAssistant()
+// ran it inline: the same outcomes, logs and safe error mapping. Never
+// throws — every failure becomes a status "error" result.
+async function runAssistantTurn(
+  trimmed: string,
+  safePreviousContext: ShoppingContext | null,
+  start: number,
+  stream: { onMessageDelta: (delta: string) => void; signal: AbortSignal },
+): Promise<AssistantTurnResult> {
   try {
-    const result = await getShoppingAssistantResponse(trimmed, safePreviousContext);
+    const result = await getShoppingAssistantResponse(trimmed, safePreviousContext, stream);
     const durationMs = Math.round(performance.now() - start);
 
     if (result.status === "no_results") {

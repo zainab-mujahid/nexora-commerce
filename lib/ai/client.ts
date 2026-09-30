@@ -255,3 +255,101 @@ export async function generateStructuredJson(params: {
     throw err;
   }
 }
+
+// Streaming counterpart of generateStructuredJson() above, for the one caller
+// that shows output while it's generated (lib/ai/recommend.ts, when the
+// shopping assistant streams). Same model, same request config, same
+// post-generation checks, same return contract (the parsed JSON, still
+// `unknown` and still untrusted) — the only difference is that
+// `onTextChunk` receives each chunk of raw response text as Gemini produces
+// it, so the caller can surface progress before the JSON is complete. The
+// raw text is a JSON prefix: callers must never treat it as validated data.
+//
+// Retry (withAiRetry) wraps only opening the stream and reading its first
+// chunk — the part that corresponds to generateStructuredJson()'s raw
+// round-trip, where rate-limit/unavailable/network errors surface. Once a
+// chunk has been handed to `onTextChunk`, a failure can't be retried
+// transparently (the caller has already shown that text), so it propagates
+// like any other failure.
+//
+// `signal` cancels the underlying HTTP request (e.g. the customer left the
+// page). An abort is classified "internal", so it's never retried.
+export async function generateStructuredJsonStream(params: {
+  systemInstruction: string;
+  contents: string;
+  responseSchema: Schema;
+  maxOutputTokens: number;
+  thinkingLevel?: ThinkingLevel;
+  operation: AiOperation;
+  onTextChunk: (text: string) => void;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const start = performance.now();
+  let failureStage: "provider_request" | "truncated" | "empty_response" | "malformed_json" =
+    "provider_request";
+  try {
+    const { stream, first } = await withAiRetry(
+      async () => {
+        const stream = await ai.models.generateContentStream({
+          model: GENERATION_MODEL,
+          contents: params.contents,
+          config: {
+            systemInstruction: params.systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: params.responseSchema,
+            maxOutputTokens: params.maxOutputTokens,
+            ...(params.thinkingLevel && { thinkingConfig: { thinkingLevel: params.thinkingLevel } }),
+            ...(params.signal && { abortSignal: params.signal }),
+          },
+        });
+        return { stream, first: await stream.next() };
+      },
+      { operation: params.operation },
+    );
+
+    let text = "";
+    let finishReason: FinishReason | undefined;
+    for (let chunk = first; !chunk.done; chunk = await stream.next()) {
+      finishReason = chunk.value.candidates?.[0]?.finishReason ?? finishReason;
+      const chunkText = chunk.value.text;
+      if (chunkText) {
+        text += chunkText;
+        params.onTextChunk(chunkText);
+      }
+    }
+
+    // The same checks, in the same order, as generateStructuredJson().
+    if (finishReason === FinishReason.MAX_TOKENS) {
+      failureStage = "truncated";
+      throw new AiInvalidResponseError("Gemini's structured response was truncated.");
+    }
+
+    if (!text) {
+      failureStage = "empty_response";
+      throw new Error("Gemini returned an empty structured response.");
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      failureStage = "malformed_json";
+      throw new AiInvalidResponseError("Gemini returned malformed JSON.");
+    }
+
+    logAiEvent("info", "ai_provider_call", {
+      operation: params.operation,
+      outcome: "success",
+      durationMs: Math.round(performance.now() - start),
+    });
+    return parsed;
+  } catch (err) {
+    logAiEvent("error", "ai_provider_call", {
+      operation: params.operation,
+      outcome: "error",
+      durationMs: Math.round(performance.now() - start),
+      failureStage,
+    });
+    throw err;
+  }
+}
