@@ -38,6 +38,25 @@ export const forgotPasswordSchema = z.object({
   email: z.email({ error: "Please enter a valid email." }).trim(),
 });
 
+// Must match "Email OTP Length" in the Supabase Dashboard (Authentication ->
+// Sign In / Providers -> Email). Supabase generates and checks the code; this
+// only shapes the input and rejects obviously malformed codes before a
+// verification attempt is spent on them.
+export const RECOVERY_CODE_LENGTH = 6;
+
+export const recoveryCodeSchema = z
+  .string()
+  // Pasted codes often carry spaces or dashes ("123 456").
+  .transform((value) => value.replace(/[\s-]/g, ""))
+  .pipe(
+    z
+      .string()
+      .min(1, { error: "Enter the code from your email." })
+      .regex(new RegExp(`^\\d{${RECOVERY_CODE_LENGTH}}$`), {
+        error: `Enter all ${RECOVERY_CODE_LENGTH} digits of the code.`,
+      }),
+  );
+
 export const resetPasswordSchema = z
   .object({
     password: passwordSchema,
@@ -50,12 +69,30 @@ export const resetPasswordSchema = z
     path: ["confirmPassword"],
   });
 
+// The in-progress reset: the email a code was requested for, and when (epoch
+// ms, used only to pace the "Resend code" button).
+export type PendingRecovery = { email: string; sentAt: number };
+
 export type ForgotPasswordState =
   | {
       errors?: { email?: string[] };
       message?: string;
-      sent?: boolean;
+      sent?: PendingRecovery;
     }
+  | undefined;
+
+export type VerifyRecoveryCodeState =
+  | {
+      errors?: { code?: string[] };
+      message?: string;
+      // The pending request is gone (expired or cleared) — the user has to
+      // start over from the email step.
+      restart?: boolean;
+    }
+  | undefined;
+
+export type ResendRecoveryCodeState =
+  | { sent?: PendingRecovery; message?: string; restart?: boolean }
   | undefined;
 
 export type ResetPasswordState =

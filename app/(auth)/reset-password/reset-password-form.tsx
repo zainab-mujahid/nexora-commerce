@@ -6,19 +6,19 @@ import { useActionState } from "react";
 import { TextField } from "@/app/_components/text-field";
 import { updatePassword } from "@/lib/auth/password-recovery";
 
+import { KeyIcon, RecoveryHeader, RecoverySteps } from "../_components/recovery-ui";
+
 export function ResetPasswordForm() {
   const [state, action, pending] = useActionState(updatePassword, undefined);
 
   return (
-    <form action={action} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Set a new password
-        </h1>
-        <p className="text-sm text-muted">
-          Choose a new password for your Nexora account.
+    <form action={action} className="flex flex-col gap-5">
+      <RecoverySteps current={3} />
+      <RecoveryHeader icon={<KeyIcon />} title="Set a new password">
+        <p>
+          You          Code verified. Choose a new password for your Nexora account.apos;re verified. Choose a new password for your Nexora account.
         </p>
-      </div>
+      </RecoveryHeader>
 
       <TextField
         label="New password"
@@ -44,7 +44,7 @@ export function ResetPasswordForm() {
 
       {state?.sessionExpired ? (
         <Link href="/forgot-password" className="btn btn-primary">
-          Request a new link
+          Request a new code
         </Link>
       ) : (
         <button type="submit" disabled={pending} className="btn btn-primary">
