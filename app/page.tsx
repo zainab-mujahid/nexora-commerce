@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 import { Suspense } from "react";
 
@@ -8,8 +7,9 @@ import {
   FeaturedProducts,
   FeaturedProductsSkeleton,
 } from "@/app/_components/featured-products";
+import { HeroCarousel } from "@/app/_components/hero-carousel";
 import { HeroTypewriter } from "@/app/_components/hero-typewriter";
-import { Reveal, Stagger, StaggerItem } from "@/app/_components/motion/reveal";
+import { Stagger, StaggerItem } from "@/app/_components/motion/reveal";
 import { SectionHeader } from "@/app/_components/section-header";
 import { getProfile, getUser } from "@/lib/auth/dal";
 import { getCategories } from "@/lib/catalog/categories";
@@ -63,26 +63,10 @@ export default async function Home() {
     <main className="flex flex-1 flex-col">
       <section className="mx-auto w-full max-w-6xl px-4 pt-6 sm:px-6 sm:pt-10">
         <div className="hero-banner hero-surface relative overflow-hidden rounded-2xl border border-border px-6 py-12 shadow-[var(--shadow-raised)] sm:px-12 sm:py-16 lg:flex lg:min-h-[26rem] lg:items-center">
-          {/* Banner artwork as a decorative background layer (alt=""): the
-              copy stays on its dark left side. From 1024px the image is
-              anchored right, and from 768px at 82%, so the whole cart stays
-              in view beside the copy (which keeps to the left half). Below
-              768px there is no room for both, so the image is anchored to
-              its dark left side and zoomed from the left edge, keeping the
-              cart out of frame rather than under the text. Served as-is: it is
-              already a compact WebP. */}
-          {/* The artwork settles in with a slow, slight zoom-out. */}
-          <Reveal trigger="mount" rise={0} scale={1.04} className="absolute inset-0">
-            <Image
-              src="/images/nexora-hero.webp"
-              alt=""
-              fill
-              unoptimized
-              loading="eager"
-              fetchPriority="high"
-              className="object-cover object-[0%_50%] max-md:origin-left max-md:scale-[1.35] md:object-[82%_50%] lg:object-[100%_45%]"
-            />
-          </Reveal>
+          {/* Banner artwork: three decorative photos (alt="") that crossfade
+              in one fixed background layer, with per-image crops so the
+              products sit beside the copy (see HeroCarousel). */}
+          <HeroCarousel />
           <div aria-hidden="true" className="hero-banner-overlay" />
           {/* Decorative ambient layer behind the copy (see .hero-ambient). */}
           <div aria-hidden="true" className="hero-ambient">
