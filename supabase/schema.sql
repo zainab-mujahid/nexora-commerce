@@ -1195,3 +1195,1239 @@ $$;
 revoke all on function public.search_catalog_products(text, extensions.vector, uuid, text, integer, integer, integer) from public;
 revoke all on function public.search_catalog_products(text, extensions.vector, uuid, text, integer, integer, integer) from anon, authenticated;
 grant execute on function public.search_catalog_products(text, extensions.vector, uuid, text, integer, integer, integer) to anon, authenticated;
+
+-- ============================================================================
+-- Payments P1 — provider-neutral payment database architecture
+--
+-- Lifecycle this section supports (the application wiring arrives in later
+-- phases; nothing here is called by the app yet):
+--
+--   cart -> begin_checkout()          checkout_session + stock reserved,
+--                                     cart untouched, NO order
+--        -> create_payment_attempt()  payments row, amount/currency copied
+--                                     from the session, never from a caller
+--        -> attach_provider_payment() binds the provider's payment id
+--        -> record_payment_status()   controlled status transitions from the
+--                                     provider adapter's verified result
+--        -> finalize_paid_checkout()  the ONLY path that creates an order
+--                                     for an online payment
+--   or   -> release_checkout_session() reservation returned exactly once
+--
+-- An orders row created through this flow means "payment was verified and
+-- the order is confirmed". place_order() above is intentionally untouched
+-- and still callable: the current checkout depends on it until the
+-- checkout-switch phase revokes it together with the application change.
+--
+-- Provider-neutral by design: no provider-specific columns or states. A
+-- provider adapter maps its own statuses onto the generic ones before
+-- calling record_payment_status().
+--
+-- Locking rules shared by every function below (deadlock avoidance):
+--   1. a per-user transaction advisory lock is taken FIRST, so all checkout
+--      and payment mutations for one customer run one at a time;
+--   2. then row locks in a fixed order: checkout session -> payment(s) ->
+--      products (always in product-id order, the same order place_order()
+--      and admin_cancel_order() use) -> cart_items (product-id order).
+--
+-- Every function here is SECURITY DEFINER with an empty search_path and
+-- fully schema-qualified references. begin_checkout() is callable by
+-- signed-in customers (it acts only on auth.uid()); every other function is
+-- executable ONLY by service_role, the role the server-side Supabase secret
+-- key maps to. service_role bypasses RLS but not GRANTs, and it is granted
+-- SELECT only on the new tables — so even the secret key can change payment
+-- state solely through these functions.
+-- ============================================================================
+
+-- ---- Allow-list validators -------------------------------------------------
+-- IMMUTABLE so they can back CHECK constraints. They make it structurally
+-- impossible to store raw provider payloads, headers or card data: only
+-- known top-level keys with short scalar values are accepted.
+
+-- payments.display_summary: what the UI may later show about a payment.
+create or replace function public.payment_display_summary_is_valid(p_summary jsonb)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select jsonb_typeof(p_summary) = 'object'
+    and octet_length(p_summary::text) <= 1024
+    and not exists (
+      select 1
+      from pg_catalog.jsonb_each(p_summary) e
+      where e.key <> all (array['brand', 'last4', 'method', 'environment'])
+         or jsonb_typeof(e.value) <> 'string'
+         or char_length(e.value #>> '{}') > 64
+         or (e.key = 'last4' and (e.value #>> '{}') !~ '^[0-9]{4}$')
+    );
+$$;
+
+-- payment_events.details: safe audit metadata (identifiers, codes, expected
+-- vs received values for verification failures). No nested objects/arrays.
+create or replace function public.payment_event_details_is_valid(p_details jsonb)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select jsonb_typeof(p_details) = 'object'
+    and octet_length(p_details::text) <= 4096
+    and not exists (
+      select 1
+      from pg_catalog.jsonb_each(p_details) e
+      where e.key <> all (array[
+              'reason', 'code', 'category', 'message', 'environment',
+              'provider_state', 'provider_event_type', 'http_status', 'attempt',
+              'reference', 'amount_minor', 'currency', 'account_matches',
+              'expected_reference', 'received_reference',
+              'expected_amount_minor', 'received_amount_minor',
+              'expected_currency', 'received_currency',
+              'expected_provider_payment_id', 'received_provider_payment_id'
+            ])
+         or jsonb_typeof(e.value) not in ('string', 'number', 'boolean', 'null')
+         or (jsonb_typeof(e.value) = 'string' and char_length(e.value #>> '{}') > 500)
+    );
+$$;
+
+revoke all on function public.payment_display_summary_is_valid(jsonb) from public, anon, authenticated;
+revoke all on function public.payment_event_details_is_valid(jsonb) from public, anon, authenticated;
+
+-- ---- checkout_sessions -----------------------------------------------------
+-- A payment-in-progress checkout. NOT an order. Holds the stock reservation,
+-- the immutable address snapshot and the authoritative totals the payment
+-- must match.
+--
+-- amount_minor is the provider-facing amount in USD cents. The CHECK ties it
+-- exactly to total (numeric(10,2) * 100 is always integral), so the two can
+-- never disagree. total equals subtotal until a shipping/tax model exists
+-- (same rule as place_order()).
+create table if not exists public.checkout_sessions (
+  id               uuid primary key default gen_random_uuid(),
+  user_id          uuid not null references auth.users (id) on delete cascade,
+  status           text not null default 'awaiting_payment'
+                     check (status in ('awaiting_payment', 'completed', 'expired', 'cancelled', 'payment_conflict')),
+  currency         text not null default 'USD' check (currency = 'USD'),
+  subtotal         numeric(10, 2) not null check (subtotal >= 0),
+  total            numeric(10, 2) not null check (total > 0),
+  amount_minor     bigint not null check (amount_minor > 0),
+  shipping_address jsonb not null check (jsonb_typeof(shipping_address) = 'object'),
+  idempotency_key  uuid not null,
+  order_id         uuid unique,
+  reserved_until   timestamptz not null,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  constraint checkout_sessions_amount_minor_matches_total
+    check (amount_minor::numeric = total * 100),
+  -- A session is completed exactly when it produced an order.
+  constraint checkout_sessions_completed_iff_order
+    check ((status = 'completed') = (order_id is not null)),
+  -- Idempotent creation: one session per (customer, idempotency key).
+  constraint checkout_sessions_user_idempotency_key_key
+    unique (user_id, idempotency_key),
+  -- Targets for the composite foreign keys on payments and orders below:
+  -- they make it impossible for a payment or an order to disagree with its
+  -- session about the customer, the amount or the currency.
+  constraint checkout_sessions_payment_identity_key
+    unique (id, user_id, amount_minor, currency),
+  constraint checkout_sessions_order_identity_key
+    unique (id, user_id, total, currency)
+);
+
+-- At most one payment-in-progress checkout per customer — the database
+-- backstop against double reservation (concurrent "Pay" clicks with
+-- different idempotency keys, two tabs, retries).
+create unique index if not exists checkout_sessions_one_awaiting_per_user_idx
+  on public.checkout_sessions (user_id)
+  where status = 'awaiting_payment';
+
+-- Expiry sweeps scan only live reservations.
+create index if not exists checkout_sessions_awaiting_reserved_until_idx
+  on public.checkout_sessions (reserved_until)
+  where status = 'awaiting_payment';
+
+-- ---- checkout_session_items ------------------------------------------------
+-- Exactly what was reserved and what the payment is for. The order is built
+-- from these snapshots, never from product prices at finalize time.
+-- product_id is nullable (set null if the product is later deleted) so the
+-- snapshot survives, like order_items.
+create table if not exists public.checkout_session_items (
+  id                  uuid primary key default gen_random_uuid(),
+  checkout_session_id uuid not null references public.checkout_sessions (id) on delete cascade,
+  product_id          uuid references public.products (id) on delete set null,
+  product_name        text not null,
+  unit_price          numeric(10, 2) not null check (unit_price >= 0),
+  quantity            integer not null check (quantity > 0),
+  subtotal            numeric(10, 2) not null,
+  constraint checkout_session_items_subtotal_matches
+    check (subtotal = unit_price * quantity),
+  -- unique(user_id, product_id) on cart_items means one line per product.
+  constraint checkout_session_items_session_product_key
+    unique (checkout_session_id, product_id)
+);
+
+create index if not exists checkout_session_items_product_id_idx
+  on public.checkout_session_items (product_id);
+
+-- ---- payments --------------------------------------------------------------
+-- One row per provider payment attempt (a retry may create another attempt
+-- for the same session). Provider-neutral: `provider` is a short slug
+-- ('safepay', later e.g. 'stripe'), provider_payment_id is the provider's
+-- own identifier, and this row's id is Nexora's reference sent to the
+-- provider. History stays readable after a provider switch.
+--
+-- The composite foreign key copies the session's user/amount/currency into
+-- the payment and keeps them equal: a payment cannot exist for an amount or
+-- currency other than its session's.
+create table if not exists public.payments (
+  id                  uuid primary key default gen_random_uuid(),
+  checkout_session_id uuid not null,
+  order_id            uuid references public.orders (id) on delete set null,
+  user_id             uuid not null references auth.users (id) on delete cascade,
+  provider            text not null check (provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+  provider_payment_id text check (char_length(provider_payment_id) between 1 and 255),
+  amount_minor        bigint not null check (amount_minor > 0),
+  currency            text not null default 'USD' check (currency = 'USD'),
+  status              text not null default 'pending'
+                        check (status in ('pending', 'processing', 'paid', 'failed', 'cancelled',
+                                          'expired', 'refunded', 'partially_refunded', 'requires_review')),
+  failure_code        text check (char_length(failure_code) <= 64),
+  failure_message     text check (char_length(failure_message) <= 500),
+  display_summary     jsonb not null default '{}'::jsonb
+                        check (public.payment_display_summary_is_valid(display_summary)),
+  last_checked_at     timestamptz,
+  paid_at             timestamptz,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  constraint payments_session_identity_fkey
+    foreign key (checkout_session_id, user_id, amount_minor, currency)
+    references public.checkout_sessions (id, user_id, amount_minor, currency)
+    on delete cascade,
+  -- A provider id identifies at most one Nexora payment (NULLs allowed).
+  constraint payments_provider_payment_id_key
+    unique (provider, provider_payment_id),
+  -- Money-received states always carry the provider id and a paid time.
+  constraint payments_settled_has_provider_id_and_paid_at
+    check (status not in ('paid', 'partially_refunded', 'refunded')
+           or (provider_payment_id is not null and paid_at is not null))
+);
+
+create index if not exists payments_checkout_session_id_idx on public.payments (checkout_session_id);
+create index if not exists payments_user_id_idx on public.payments (user_id);
+create index if not exists payments_order_id_idx on public.payments (order_id);
+
+-- At most one successfully paid payment per checkout session. A second
+-- verified success (customer paid twice) is recorded as requires_review by
+-- record_payment_status() instead, for a refund.
+create unique index if not exists payments_one_settled_per_session_idx
+  on public.payments (checkout_session_id)
+  where status in ('paid', 'partially_refunded', 'refunded');
+
+-- At most one unsettled attempt per session. 'failed' counts as unsettled:
+-- hosted checkouts generally let the customer retry the same provider
+-- payment, so a new attempt is only opened after the previous one is
+-- explicitly closed (cancelled/expired) — which limits how many provider
+-- payments for one checkout can be live at once.
+create unique index if not exists payments_one_unsettled_per_session_idx
+  on public.payments (checkout_session_id)
+  where status in ('pending', 'processing', 'failed');
+
+-- ---- payment_events --------------------------------------------------------
+-- Webhook/verification audit log and webhook idempotency. details is limited
+-- to allow-listed scalar metadata (see payment_event_details_is_valid); raw
+-- bodies, headers, secrets and card data cannot be stored.
+--
+-- Deduplication applies only to signature-verified events: an unverified
+-- request could otherwise claim a genuine future event id and get the real
+-- event treated as a duplicate. Unverified requests are still logged
+-- (signature_valid = false) but never block anything. Internally generated
+-- events (e.g. a failed verification lookup) use an id the application
+-- makes unique, such as 'internal:<uuid>'.
+create table if not exists public.payment_events (
+  id                uuid primary key default gen_random_uuid(),
+  provider          text not null check (provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+  provider_event_id text not null check (char_length(provider_event_id) between 1 and 255),
+  payment_id        uuid references public.payments (id) on delete set null,
+  event_type        text not null check (char_length(event_type) between 1 and 100),
+  signature_valid   boolean not null,
+  outcome           text not null default 'received'
+                      check (outcome in ('received', 'processed', 'ignored', 'verification_failed',
+                                         'rejected_signature', 'error')),
+  details           jsonb not null default '{}'::jsonb
+                      check (public.payment_event_details_is_valid(details)),
+  received_at       timestamptz not null default now(),
+  processed_at      timestamptz
+);
+
+create unique index if not exists payment_events_verified_provider_event_idx
+  on public.payment_events (provider, provider_event_id)
+  where signature_valid;
+
+create index if not exists payment_events_payment_id_idx on public.payment_events (payment_id);
+create index if not exists payment_events_unprocessed_idx
+  on public.payment_events (received_at)
+  where processed_at is null;
+
+-- ---- orders: generic payment relationship ----------------------------------
+-- payment_status is the order's payment summary, separate from the
+-- fulfilment `status`:
+--   not_collected       — no online payment recorded by this system: every
+--                         order placed before online payments (backfilled by
+--                         the default below) and any order still created by
+--                         place_order() until the checkout switch.
+--   paid / partially_refunded / refunded — orders created by
+--                         finalize_paid_checkout() after a verified payment.
+-- Adding the columns with defaults backfills existing rows; re-running is a
+-- no-op. No customer UPDATE grant covers these columns (orders UPDATE is
+-- column-level: status/updated_at only).
+alter table public.orders add column if not exists currency text not null default 'USD';
+alter table public.orders add column if not exists payment_status text not null default 'not_collected';
+alter table public.orders add column if not exists checkout_session_id uuid;
+
+-- One checkout can produce at most one order.
+create unique index if not exists orders_checkout_session_id_key
+  on public.orders (checkout_session_id);
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.orders'::regclass and conname = 'orders_currency_check') then
+    alter table public.orders
+      add constraint orders_currency_check check (currency = 'USD');
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.orders'::regclass and conname = 'orders_payment_status_check') then
+    alter table public.orders
+      add constraint orders_payment_status_check
+      check (payment_status in ('paid', 'partially_refunded', 'refunded', 'not_collected'));
+  end if;
+
+  -- Legacy/not-collected orders never have a checkout session; every
+  -- session-backed order carries a collected-payment status.
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.orders'::regclass and conname = 'orders_payment_session_consistency') then
+    alter table public.orders
+      add constraint orders_payment_session_consistency
+      check ((payment_status = 'not_collected') = (checkout_session_id is null));
+  end if;
+
+  -- A session-backed order must match its session's customer, total and
+  -- currency (MATCH SIMPLE: rows with a NULL checkout_session_id — legacy
+  -- orders — are not checked).
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.orders'::regclass and conname = 'orders_checkout_session_identity_fkey') then
+    alter table public.orders
+      add constraint orders_checkout_session_identity_fkey
+      foreign key (checkout_session_id, user_id, total, currency)
+      references public.checkout_sessions (id, user_id, total, currency);
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.checkout_sessions'::regclass and conname = 'checkout_sessions_order_id_fkey') then
+    alter table public.checkout_sessions
+      add constraint checkout_sessions_order_id_fkey
+      foreign key (order_id) references public.orders (id);
+  end if;
+end;
+$$;
+
+-- ---- Row Level Security ----------------------------------------------------
+alter table public.checkout_sessions enable row level security;
+alter table public.checkout_session_items enable row level security;
+alter table public.payments enable row level security;
+alter table public.payment_events enable row level security;
+
+-- Customers read only their own sessions/items/payments; the admin reads all.
+-- There are no INSERT/UPDATE/DELETE policies: nobody writes these tables
+-- except the SECURITY DEFINER functions below.
+drop policy if exists "checkout_sessions_select_own_or_admin" on public.checkout_sessions;
+create policy "checkout_sessions_select_own_or_admin" on public.checkout_sessions
+  for select using (user_id = auth.uid() or public.is_admin());
+
+drop policy if exists "checkout_session_items_select_via_session" on public.checkout_session_items;
+create policy "checkout_session_items_select_via_session" on public.checkout_session_items
+  for select using (
+    exists (
+      select 1 from public.checkout_sessions s
+      where s.id = checkout_session_items.checkout_session_id
+        and (s.user_id = auth.uid() or public.is_admin())
+    )
+  );
+
+drop policy if exists "payments_select_own_or_admin" on public.payments;
+create policy "payments_select_own_or_admin" on public.payments
+  for select using (user_id = auth.uid() or public.is_admin());
+
+-- Audit data: admin only, never customers.
+drop policy if exists "payment_events_select_admin" on public.payment_events;
+create policy "payment_events_select_admin" on public.payment_events
+  for select using (public.is_admin());
+
+-- ---- Table privileges ------------------------------------------------------
+-- Revoke everything first (Supabase's default privileges can grant new
+-- public tables to anon/authenticated/service_role directly), then grant
+-- SELECT only. No role gets INSERT/UPDATE/DELETE — including service_role.
+revoke all on table public.checkout_sessions      from public, anon, authenticated, service_role;
+revoke all on table public.checkout_session_items from public, anon, authenticated, service_role;
+revoke all on table public.payments               from public, anon, authenticated, service_role;
+revoke all on table public.payment_events         from public, anon, authenticated, service_role;
+
+grant select on public.checkout_sessions, public.checkout_session_items, public.payments, public.payment_events
+  to authenticated, service_role;
+
+-- ============================================================================
+-- begin_checkout(): reserve stock into a checkout session (customer RPC)
+--
+-- Replaces the FIRST half of place_order() for the online-payment flow,
+-- with the same validation and the same locking (cart_items + products
+-- locked together, products in id order). Differences: it creates a
+-- checkout_session instead of an order, does NOT clear the cart, and is
+-- idempotent on (customer, p_idempotency_key).
+--
+-- Concurrency: the per-user advisory lock serializes a customer's checkout
+-- calls, so "same key returns the same session" and "one awaiting session
+-- per customer" are decided without races; the partial unique index is the
+-- backstop. Stock is decremented under the product row locks, so two
+-- customers can never both reserve the last unit.
+--
+-- Errors (raised, transaction rolled back, nothing reserved):
+--   AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, ADDRESS_NOT_FOUND, CART_EMPTY,
+--   PRODUCT_UNAVAILABLE:<product_id>, INSUFFICIENT_STOCK:<product_id>,
+--   INVALID_TOTAL (a zero-value cart cannot be paid online),
+--   CHECKOUT_IN_PROGRESS:<checkout_session_id> (another payment-in-progress
+--   checkout exists; the app offers resume/cancel).
+-- ============================================================================
+create or replace function public.begin_checkout(p_address_id uuid, p_idempotency_key uuid)
+returns table (
+  checkout_session_id uuid,
+  session_status      text,
+  amount_minor        bigint,
+  currency            text,
+  reserved_until      timestamptz,
+  reused              boolean
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  -- Reservation window approved for the first Safepay sandbox phase.
+  c_hold constant interval := interval '60 minutes';
+  v_user_id     uuid := auth.uid();
+  v_session     public.checkout_sessions%rowtype;
+  v_address     jsonb;
+  v_subtotal    numeric(10, 2) := 0;
+  v_item        record;
+  v_has_items   boolean := false;
+  -- Same role as in place_order(): later statements touch exactly the
+  -- validated/locked products, never cart rows added concurrently.
+  v_product_ids uuid[] := '{}';
+begin
+  if v_user_id is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+  if p_idempotency_key is null then
+    raise exception 'IDEMPOTENCY_KEY_REQUIRED';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+
+  -- Idempotent replay: same customer + key returns the existing session
+  -- (whatever its state) and reserves nothing.
+  select s.* into v_session
+  from public.checkout_sessions s
+  where s.user_id = v_user_id and s.idempotency_key = p_idempotency_key;
+
+  if found then
+    return query select v_session.id, v_session.status, v_session.amount_minor,
+                        v_session.currency, v_session.reserved_until, true;
+    return;
+  end if;
+
+  select s.* into v_session
+  from public.checkout_sessions s
+  where s.user_id = v_user_id and s.status = 'awaiting_payment';
+
+  if found then
+    raise exception 'CHECKOUT_IN_PROGRESS:%', v_session.id;
+  end if;
+
+  select jsonb_build_object(
+    'full_name', a.full_name,
+    'line1', a.line1,
+    'line2', a.line2,
+    'city', a.city,
+    'state', a.state,
+    'postal_code', a.postal_code,
+    'country', a.country
+  )
+  into v_address
+  from public.addresses a
+  where a.id = p_address_id and a.user_id = v_user_id;
+
+  if v_address is null then
+    raise exception 'ADDRESS_NOT_FOUND';
+  end if;
+
+  for v_item in
+    select c.product_id, c.quantity, p.price, p.stock, p.is_active
+    from public.cart_items c
+    join public.products p on p.id = c.product_id
+    where c.user_id = v_user_id
+    order by p.id
+    for update of c, p
+  loop
+    v_has_items := true;
+
+    if not v_item.is_active then
+      raise exception 'PRODUCT_UNAVAILABLE:%', v_item.product_id;
+    end if;
+    if v_item.stock < v_item.quantity then
+      raise exception 'INSUFFICIENT_STOCK:%', v_item.product_id;
+    end if;
+
+    v_subtotal := v_subtotal + (v_item.price * v_item.quantity);
+    v_product_ids := v_product_ids || v_item.product_id;
+  end loop;
+
+  if not v_has_items then
+    raise exception 'CART_EMPTY';
+  end if;
+  if v_subtotal <= 0 then
+    raise exception 'INVALID_TOTAL';
+  end if;
+
+  -- total = subtotal until a shipping/tax model exists; amount_minor is
+  -- derived here from the database total, never accepted from a caller.
+  insert into public.checkout_sessions
+    (user_id, status, currency, subtotal, total, amount_minor, shipping_address,
+     idempotency_key, reserved_until)
+  values
+    (v_user_id, 'awaiting_payment', 'USD', v_subtotal, v_subtotal, (v_subtotal * 100)::bigint,
+     v_address, p_idempotency_key, now() + c_hold)
+  returning * into v_session;
+
+  insert into public.checkout_session_items
+    (checkout_session_id, product_id, product_name, unit_price, quantity, subtotal)
+  select v_session.id, p.id, p.name, p.price, c.quantity, p.price * c.quantity
+  from public.cart_items c
+  join public.products p on p.id = c.product_id
+  where c.user_id = v_user_id
+    and c.product_id = any(v_product_ids);
+
+  -- The reservation: the only stock decrement in this flow.
+  update public.products p
+  set stock = p.stock - c.quantity
+  from public.cart_items c
+  where c.product_id = p.id and c.user_id = v_user_id
+    and c.product_id = any(v_product_ids);
+
+  return query select v_session.id, v_session.status, v_session.amount_minor,
+                      v_session.currency, v_session.reserved_until, false;
+end;
+$$;
+
+revoke all on function public.begin_checkout(uuid, uuid) from public, anon, authenticated, service_role;
+grant execute on function public.begin_checkout(uuid, uuid) to authenticated;
+
+-- ============================================================================
+-- create_payment_attempt(): open (or reuse) a payment attempt — server only
+--
+-- Amount and currency are copied from the session (and the composite
+-- foreign key keeps them equal); the caller supplies only the session id
+-- and the provider slug. If an unsettled attempt already exists for the same
+-- provider it is returned (reused = true) so a retried/duplicated request
+-- never opens a second live provider payment.
+--
+-- Errors: INVALID_PROVIDER, CHECKOUT_SESSION_NOT_FOUND,
+--   CHECKOUT_SESSION_NOT_PAYABLE:<status>, RESERVATION_EXPIRED,
+--   OPEN_ATTEMPT_OTHER_PROVIDER:<payment_id>.
+-- ============================================================================
+create or replace function public.create_payment_attempt(p_checkout_session_id uuid, p_provider text)
+returns table (
+  payment_id          uuid,
+  amount_minor        bigint,
+  currency            text,
+  payment_status      text,
+  provider_payment_id text,
+  reused              boolean
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_user_id uuid;
+  v_session public.checkout_sessions%rowtype;
+  v_payment public.payments%rowtype;
+begin
+  if p_provider is null or p_provider !~ '^[a-z][a-z0-9_]{1,31}$' then
+    raise exception 'INVALID_PROVIDER';
+  end if;
+
+  select s.user_id into v_user_id
+  from public.checkout_sessions s where s.id = p_checkout_session_id;
+  if v_user_id is null then
+    raise exception 'CHECKOUT_SESSION_NOT_FOUND';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+
+  select s.* into v_session
+  from public.checkout_sessions s where s.id = p_checkout_session_id
+  for update;
+
+  if v_session.status <> 'awaiting_payment' then
+    raise exception 'CHECKOUT_SESSION_NOT_PAYABLE:%', v_session.status;
+  end if;
+  if v_session.reserved_until <= now() then
+    raise exception 'RESERVATION_EXPIRED';
+  end if;
+
+  select p.* into v_payment
+  from public.payments p
+  where p.checkout_session_id = v_session.id
+    and p.status in ('pending', 'processing', 'failed')
+  for update;
+
+  if found then
+    if v_payment.provider <> p_provider then
+      raise exception 'OPEN_ATTEMPT_OTHER_PROVIDER:%', v_payment.id;
+    end if;
+    return query select v_payment.id, v_payment.amount_minor, v_payment.currency,
+                        v_payment.status, v_payment.provider_payment_id, true;
+    return;
+  end if;
+
+  insert into public.payments
+    (checkout_session_id, user_id, provider, amount_minor, currency, status)
+  values
+    (v_session.id, v_session.user_id, p_provider, v_session.amount_minor, v_session.currency, 'pending')
+  returning * into v_payment;
+
+  return query select v_payment.id, v_payment.amount_minor, v_payment.currency,
+                      v_payment.status, v_payment.provider_payment_id, false;
+end;
+$$;
+
+revoke all on function public.create_payment_attempt(uuid, text) from public, anon, authenticated, service_role;
+grant execute on function public.create_payment_attempt(uuid, text) to service_role;
+
+-- ============================================================================
+-- attach_provider_payment(): bind the provider's payment id — server only
+--
+-- Idempotent for the same id; refuses a different provider, a different id
+-- for an already-bound payment, an id already used by another payment, and
+-- binding anything but a pending attempt.
+--
+-- Errors: INVALID_PROVIDER_PAYMENT_ID, PAYMENT_NOT_FOUND, PROVIDER_MISMATCH,
+--   PROVIDER_PAYMENT_ALREADY_BOUND, PAYMENT_NOT_BINDABLE:<status>,
+--   PROVIDER_PAYMENT_ID_IN_USE.
+-- ============================================================================
+create or replace function public.attach_provider_payment(
+  p_payment_id uuid,
+  p_provider text,
+  p_provider_payment_id text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_payment public.payments%rowtype;
+begin
+  if p_provider_payment_id is null or char_length(p_provider_payment_id) not between 1 and 255 then
+    raise exception 'INVALID_PROVIDER_PAYMENT_ID';
+  end if;
+
+  select p.user_id into v_user_id from public.payments p where p.id = p_payment_id;
+  if v_user_id is null then
+    raise exception 'PAYMENT_NOT_FOUND';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+
+  select p.* into v_payment from public.payments p where p.id = p_payment_id for update;
+
+  if v_payment.provider is distinct from p_provider then
+    raise exception 'PROVIDER_MISMATCH';
+  end if;
+  if v_payment.provider_payment_id is not null then
+    if v_payment.provider_payment_id = p_provider_payment_id then
+      return;
+    end if;
+    raise exception 'PROVIDER_PAYMENT_ALREADY_BOUND';
+  end if;
+  if v_payment.status <> 'pending' then
+    raise exception 'PAYMENT_NOT_BINDABLE:%', v_payment.status;
+  end if;
+
+  begin
+    update public.payments
+    set provider_payment_id = p_provider_payment_id, updated_at = now()
+    where id = v_payment.id;
+  exception when unique_violation then
+    raise exception 'PROVIDER_PAYMENT_ID_IN_USE';
+  end;
+end;
+$$;
+
+revoke all on function public.attach_provider_payment(uuid, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.attach_provider_payment(uuid, text, text) to service_role;
+
+-- ============================================================================
+-- record_payment_status(): controlled status transition — server only
+--
+-- Called with a GENERIC status the provider adapter derived from an
+-- authoritative server-to-server lookup. Allowed transitions:
+--
+--   pending/processing/failed -> any of pending, processing, failed,
+--                                cancelled, expired, paid, requires_review
+--   cancelled/expired         -> paid (late success), requires_review
+--   paid                      -> partially_refunded, refunded, requires_review
+--   partially_refunded        -> partially_refunded, refunded, requires_review
+--   refunded                  -> requires_review
+--   requires_review           -> partially_refunded, refunded
+--
+-- Anything else (e.g. paid -> failed) raises ILLEGAL_PAYMENT_TRANSITION, so a
+-- confirmed payment can never silently become failed or cancelled. A
+-- same-status call only refreshes last_checked_at and the optional fields.
+--
+-- Moving to 'paid' additionally requires the provider id to be bound and the
+-- caller's verified amount/currency. If those do not EXACTLY match this
+-- payment, or another payment of the same session is already settled, the
+-- payment becomes requires_review instead (stored, not raised, so the
+-- evidence survives) and the resulting status is returned.
+-- Refund states are mirrored onto the linked order's payment_status.
+-- ============================================================================
+create or replace function public.record_payment_status(
+  p_payment_id            uuid,
+  p_status                text,
+  p_verified_amount_minor bigint default null,
+  p_verified_currency     text default null,
+  p_failure_code          text default null,
+  p_failure_message       text default null,
+  p_display_summary       jsonb default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_payment public.payments%rowtype;
+  v_from    text;
+  v_allowed boolean;
+begin
+  if p_status is null or p_status not in ('pending', 'processing', 'paid', 'failed', 'cancelled',
+                                          'expired', 'refunded', 'partially_refunded', 'requires_review') then
+    raise exception 'INVALID_PAYMENT_STATUS';
+  end if;
+
+  select p.user_id into v_user_id from public.payments p where p.id = p_payment_id;
+  if v_user_id is null then
+    raise exception 'PAYMENT_NOT_FOUND';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+
+  select p.* into v_payment from public.payments p where p.id = p_payment_id for update;
+  v_from := v_payment.status;
+
+  if p_status = v_from then
+    update public.payments
+    set last_checked_at = now(),
+        updated_at      = now(),
+        failure_code    = coalesce(p_failure_code, failure_code),
+        failure_message = coalesce(p_failure_message, failure_message),
+        display_summary = coalesce(p_display_summary, display_summary)
+    where id = v_payment.id;
+    return v_from;
+  end if;
+
+  v_allowed := case
+    when v_from in ('pending', 'processing', 'failed') then true
+    when v_from in ('cancelled', 'expired') then p_status in ('paid', 'requires_review')
+    when v_from = 'paid' then p_status in ('partially_refunded', 'refunded', 'requires_review')
+    when v_from = 'partially_refunded' then p_status in ('refunded', 'requires_review')
+    when v_from = 'refunded' then p_status = 'requires_review'
+    when v_from = 'requires_review' then p_status in ('partially_refunded', 'refunded')
+    else false
+  end;
+
+  if not v_allowed then
+    raise exception 'ILLEGAL_PAYMENT_TRANSITION:%->%', v_from, p_status;
+  end if;
+
+  if p_status = 'paid' then
+    if v_payment.provider_payment_id is null then
+      raise exception 'PAYMENT_NOT_BOUND';
+    end if;
+    if p_verified_amount_minor is null or p_verified_currency is null then
+      raise exception 'VERIFICATION_REQUIRED';
+    end if;
+
+    if p_verified_amount_minor <> v_payment.amount_minor
+       or p_verified_currency <> v_payment.currency then
+      update public.payments
+      set status          = 'requires_review',
+          failure_code    = case when p_verified_currency <> v_payment.currency
+                                 then 'CURRENCY_MISMATCH' else 'AMOUNT_MISMATCH' end,
+          failure_message = 'Verified provider amount or currency does not match the expected payment.',
+          last_checked_at = now(),
+          updated_at      = now()
+      where id = v_payment.id;
+      return 'requires_review';
+    end if;
+
+    if exists (
+      select 1 from public.payments o
+      where o.checkout_session_id = v_payment.checkout_session_id
+        and o.id <> v_payment.id
+        and o.status in ('paid', 'partially_refunded', 'refunded')
+    ) then
+      update public.payments
+      set status          = 'requires_review',
+          failure_code    = 'DUPLICATE_PAYMENT',
+          failure_message = 'Another payment for this checkout was already completed.',
+          paid_at         = coalesce(paid_at, now()),
+          last_checked_at = now(),
+          updated_at      = now()
+      where id = v_payment.id;
+      return 'requires_review';
+    end if;
+
+    update public.payments
+    set status          = 'paid',
+        paid_at         = coalesce(paid_at, now()),
+        failure_code    = null,
+        failure_message = null,
+        display_summary = coalesce(p_display_summary, display_summary),
+        last_checked_at = now(),
+        updated_at      = now()
+    where id = v_payment.id;
+    return 'paid';
+  end if;
+
+  update public.payments
+  set status          = p_status,
+      failure_code    = coalesce(p_failure_code, failure_code),
+      failure_message = coalesce(p_failure_message, failure_message),
+      display_summary = coalesce(p_display_summary, display_summary),
+      last_checked_at = now(),
+      updated_at      = now()
+  where id = v_payment.id;
+
+  if p_status in ('partially_refunded', 'refunded') and v_payment.order_id is not null then
+    update public.orders
+    set payment_status = p_status, updated_at = now()
+    where id = v_payment.order_id;
+  end if;
+
+  return p_status;
+end;
+$$;
+
+revoke all on function public.record_payment_status(uuid, text, bigint, text, text, text, jsonb) from public, anon, authenticated, service_role;
+grant execute on function public.record_payment_status(uuid, text, bigint, text, text, text, jsonb) to service_role;
+
+-- ============================================================================
+-- finalize_paid_checkout(): create the real order — server only
+--
+-- The ONLY way an order is created for an online payment. Called after the
+-- application verified the payment with the provider (record_payment_status
+-- -> 'paid'); this function re-checks every database-side invariant itself.
+-- One transaction; idempotent:
+--
+--   outcome 'created'           order created now
+--   outcome 'already_finalized' this payment's order already exists — the
+--                               same order id is returned (redirect +
+--                               webhook racing, retries)
+--   outcome 'duplicate_payment' the session was already completed by a
+--                               different payment; this one is moved to
+--                               requires_review for a refund, no order
+--   outcome 'rejected'          amount/currency/customer/items disagree;
+--                               payment -> requires_review, no order
+--   outcome 'payment_conflict'  late payment after the reservation was
+--                               released and the stock is gone; session ->
+--                               payment_conflict, payment -> requires_review,
+--                               no order
+--
+-- Stock: normally untouched (begin_checkout already reserved it). Only for
+-- a late payment on a released session does it try to reserve the same
+-- items again — atomically, under product row locks in id order, inside
+-- this same transaction, so there is no window where the order exists
+-- without its stock (that is why late re-reservation lives here rather than
+-- in a separate function).
+--
+-- Cart: subtracts exactly the paid quantities from the customer's CURRENT
+-- cart (rows locked in product-id order); quantities added after payment
+-- started, and unrelated items, stay.
+--
+-- Raises (no state change): PAYMENT_NOT_FOUND, PAYMENT_NOT_PAID:<status>.
+-- ============================================================================
+create or replace function public.finalize_paid_checkout(p_payment_id uuid)
+returns table (order_id uuid, outcome text)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_user_id    uuid;
+  v_session_id uuid;
+  v_session    public.checkout_sessions%rowtype;
+  v_payment    public.payments%rowtype;
+  v_order_id   uuid;
+  v_items_sum  numeric(10, 2);
+  v_blocked    boolean;
+begin
+  select p.user_id, p.checkout_session_id into v_user_id, v_session_id
+  from public.payments p where p.id = p_payment_id;
+  if v_user_id is null then
+    raise exception 'PAYMENT_NOT_FOUND';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+
+  select s.* into v_session from public.checkout_sessions s where s.id = v_session_id for update;
+  select p.* into v_payment from public.payments p where p.id = p_payment_id for update;
+
+  -- Already finalized: return the same order for this payment; any other
+  -- settled payment for a completed session is a duplicate charge.
+  if v_session.order_id is not null then
+    if v_payment.order_id = v_session.order_id then
+      return query select v_session.order_id, 'already_finalized'::text;
+      return;
+    end if;
+    if v_payment.status = 'paid' then
+      update public.payments
+      set status          = 'requires_review',
+          failure_code    = 'DUPLICATE_PAYMENT',
+          failure_message = 'Another payment for this checkout was already completed.',
+          updated_at      = now()
+      where id = v_payment.id;
+    end if;
+    return query select null::uuid, 'duplicate_payment'::text;
+    return;
+  end if;
+
+  if v_payment.status <> 'paid' then
+    raise exception 'PAYMENT_NOT_PAID:%', v_payment.status;
+  end if;
+
+  if v_session.status = 'payment_conflict' then
+    return query select null::uuid, 'payment_conflict'::text;
+    return;
+  end if;
+
+  -- Database-side re-verification. The composite foreign key already ties
+  -- payment amount/currency/customer to the session; these checks also
+  -- cover the session's own totals and its item snapshots.
+  select coalesce(sum(i.subtotal), 0) into v_items_sum
+  from public.checkout_session_items i where i.checkout_session_id = v_session.id;
+
+  if v_payment.user_id <> v_session.user_id
+     or v_payment.currency <> v_session.currency
+     or v_payment.amount_minor <> v_session.amount_minor
+     or v_session.amount_minor::numeric <> v_session.total * 100
+     or v_items_sum <> v_session.subtotal
+     or v_session.total <> v_session.subtotal then
+    update public.payments
+    set status          = 'requires_review',
+        failure_code    = 'FINALIZE_INTEGRITY_MISMATCH',
+        failure_message = 'Payment does not match the checkout it was made for.',
+        updated_at      = now()
+    where id = v_payment.id;
+    return query select null::uuid, 'rejected'::text;
+    return;
+  end if;
+
+  if v_session.status in ('expired', 'cancelled') then
+    -- Late payment: the reservation was released. Re-reserve atomically or
+    -- record the conflict.
+    perform 1
+    from public.products p
+    where p.id in (
+      select i.product_id from public.checkout_session_items i
+      where i.checkout_session_id = v_session.id and i.product_id is not null
+    )
+    order by p.id
+    for update;
+
+    select exists (
+      select 1
+      from public.checkout_session_items i
+      left join public.products p on p.id = i.product_id
+      where i.checkout_session_id = v_session.id
+        and (p.id is null or not p.is_active or p.stock < i.quantity)
+    ) into v_blocked;
+
+    if v_blocked then
+      update public.checkout_sessions
+      set status = 'payment_conflict', updated_at = now()
+      where id = v_session.id;
+      update public.payments
+      set status          = 'requires_review',
+          failure_code    = 'STOCK_UNAVAILABLE_AFTER_RELEASE',
+          failure_message = 'Payment arrived after the reservation was released and the items are no longer available.',
+          updated_at      = now()
+      where id = v_payment.id;
+      return query select null::uuid, 'payment_conflict'::text;
+      return;
+    end if;
+
+    update public.products p
+    set stock = p.stock - i.quantity
+    from public.checkout_session_items i
+    where i.checkout_session_id = v_session.id and i.product_id = p.id;
+  elsif v_session.status <> 'awaiting_payment' then
+    raise exception 'CHECKOUT_SESSION_NOT_FINALIZABLE:%', v_session.status;
+  end if;
+
+  insert into public.orders
+    (user_id, status, subtotal, total, shipping_address, currency, payment_status, checkout_session_id)
+  values
+    (v_session.user_id, 'pending', v_session.subtotal, v_session.total, v_session.shipping_address,
+     v_session.currency, 'paid', v_session.id)
+  returning id into v_order_id;
+
+  insert into public.order_items (order_id, product_id, product_name, unit_price, quantity, subtotal)
+  select v_order_id, i.product_id, i.product_name, i.unit_price, i.quantity, i.subtotal
+  from public.checkout_session_items i
+  where i.checkout_session_id = v_session.id;
+
+  -- Cart delta. Lock the affected cart rows in product-id order, delete
+  -- rows fully covered by the paid quantity FIRST, then reduce the rest
+  -- (the other order would let a just-reduced row match the delete).
+  perform 1
+  from public.cart_items c
+  where c.user_id = v_session.user_id
+    and c.product_id in (
+      select i.product_id from public.checkout_session_items i
+      where i.checkout_session_id = v_session.id and i.product_id is not null
+    )
+  order by c.product_id
+  for update;
+
+  delete from public.cart_items c
+  using public.checkout_session_items i
+  where i.checkout_session_id = v_session.id
+    and c.user_id = v_session.user_id
+    and c.product_id = i.product_id
+    and c.quantity <= i.quantity;
+
+  update public.cart_items c
+  set quantity = c.quantity - i.quantity, updated_at = now()
+  from public.checkout_session_items i
+  where i.checkout_session_id = v_session.id
+    and c.user_id = v_session.user_id
+    and c.product_id = i.product_id
+    and c.quantity > i.quantity;
+
+  update public.checkout_sessions
+  set status = 'completed', order_id = v_order_id, updated_at = now()
+  where id = v_session.id;
+
+  update public.payments
+  set order_id = v_order_id, updated_at = now()
+  where id = v_payment.id;
+
+  return query select v_order_id, 'created'::text;
+end;
+$$;
+
+revoke all on function public.finalize_paid_checkout(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.finalize_paid_checkout(uuid) to service_role;
+
+-- ============================================================================
+-- release_checkout_session(): return a reservation — server only
+--
+-- Called only after the application has confirmed with the provider that
+-- no payment succeeded. Restores exactly the reserved quantities once,
+-- closes any unsettled attempts with the same reason, leaves the cart
+-- untouched. Returns the new status, or 'noop:<status>' if the session was
+-- no longer awaiting payment (already released, completed or in conflict)
+-- — releasing twice never restores stock twice.
+--
+-- Errors: INVALID_RELEASE_REASON, CHECKOUT_SESSION_NOT_FOUND,
+--   RESERVATION_NOT_EXPIRED ('expired' before reserved_until),
+--   PAYMENT_ALREADY_SETTLED (a settled payment exists: finalize instead).
+-- ============================================================================
+create or replace function public.release_checkout_session(p_checkout_session_id uuid, p_reason text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_session public.checkout_sessions%rowtype;
+begin
+  if p_reason is null or p_reason not in ('expired', 'cancelled') then
+    raise exception 'INVALID_RELEASE_REASON';
+  end if;
+
+  select s.user_id into v_user_id from public.checkout_sessions s where s.id = p_checkout_session_id;
+  if v_user_id is null then
+    raise exception 'CHECKOUT_SESSION_NOT_FOUND';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+
+  select s.* into v_session from public.checkout_sessions s where s.id = p_checkout_session_id for update;
+
+  if v_session.status <> 'awaiting_payment' then
+    return 'noop:' || v_session.status;
+  end if;
+  if p_reason = 'expired' and v_session.reserved_until > now() then
+    raise exception 'RESERVATION_NOT_EXPIRED';
+  end if;
+
+  perform 1 from public.payments p
+  where p.checkout_session_id = v_session.id
+  order by p.id
+  for update;
+
+  if exists (
+    select 1 from public.payments p
+    where p.checkout_session_id = v_session.id
+      and p.status in ('paid', 'partially_refunded', 'refunded')
+  ) then
+    raise exception 'PAYMENT_ALREADY_SETTLED';
+  end if;
+
+  perform 1
+  from public.products p
+  where p.id in (
+    select i.product_id from public.checkout_session_items i
+    where i.checkout_session_id = v_session.id and i.product_id is not null
+  )
+  order by p.id
+  for update;
+
+  update public.products p
+  set stock = p.stock + i.quantity
+  from public.checkout_session_items i
+  where i.checkout_session_id = v_session.id and i.product_id = p.id;
+
+  update public.checkout_sessions
+  set status = p_reason, updated_at = now()
+  where id = v_session.id;
+
+  update public.payments
+  set status = p_reason, updated_at = now()
+  where checkout_session_id = v_session.id
+    and status in ('pending', 'processing', 'failed');
+
+  return p_reason;
+end;
+$$;
+
+revoke all on function public.release_checkout_session(uuid, text) from public, anon, authenticated, service_role;
+grant execute on function public.release_checkout_session(uuid, text) to service_role;
+
+-- ============================================================================
+-- record_payment_event() / mark_payment_event_processed() — server only
+--
+-- record_payment_event() stores an incoming webhook/verification event and
+-- reports whether a signature-verified event with the same provider event id
+-- was already recorded (duplicate = true -> the caller acknowledges and does
+-- nothing else). Unverified events are always stored as new rows with
+-- outcome 'rejected_signature' and never deduplicate anything.
+-- ============================================================================
+create or replace function public.record_payment_event(
+  p_provider          text,
+  p_provider_event_id text,
+  p_event_type        text,
+  p_signature_valid   boolean,
+  p_payment_id        uuid default null,
+  p_details           jsonb default '{}'::jsonb
+)
+returns table (event_id uuid, duplicate boolean)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_id uuid;
+begin
+  if p_signature_valid is null then
+    raise exception 'SIGNATURE_RESULT_REQUIRED';
+  end if;
+
+  if not p_signature_valid then
+    insert into public.payment_events
+      (provider, provider_event_id, payment_id, event_type, signature_valid, outcome, details, processed_at)
+    values
+      (p_provider, p_provider_event_id, p_payment_id, p_event_type, false, 'rejected_signature',
+       coalesce(p_details, '{}'::jsonb), now())
+    returning id into v_id;
+    return query select v_id, false;
+    return;
+  end if;
+
+  insert into public.payment_events
+    (provider, provider_event_id, payment_id, event_type, signature_valid, details)
+  values
+    (p_provider, p_provider_event_id, p_payment_id, p_event_type, true, coalesce(p_details, '{}'::jsonb))
+  on conflict (provider, provider_event_id) where signature_valid do nothing
+  returning id into v_id;
+
+  if v_id is not null then
+    return query select v_id, false;
+    return;
+  end if;
+
+  select e.id into v_id
+  from public.payment_events e
+  where e.provider = p_provider and e.provider_event_id = p_provider_event_id and e.signature_valid;
+  return query select v_id, true;
+end;
+$$;
+
+create or replace function public.mark_payment_event_processed(
+  p_event_id   uuid,
+  p_outcome    text,
+  p_payment_id uuid default null,
+  p_details    jsonb default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_outcome is null or p_outcome not in ('processed', 'ignored', 'verification_failed', 'error') then
+    raise exception 'INVALID_EVENT_OUTCOME';
+  end if;
+
+  update public.payment_events
+  set outcome      = p_outcome,
+      processed_at = now(),
+      payment_id   = coalesce(p_payment_id, payment_id),
+      details      = coalesce(p_details, details)
+  where id = p_event_id;
+
+  if not found then
+    raise exception 'PAYMENT_EVENT_NOT_FOUND';
+  end if;
+end;
+$$;
+
+revoke all on function public.record_payment_event(text, text, text, boolean, uuid, jsonb) from public, anon, authenticated, service_role;
+grant execute on function public.record_payment_event(text, text, text, boolean, uuid, jsonb) to service_role;
+revoke all on function public.mark_payment_event_processed(uuid, text, uuid, jsonb) from public, anon, authenticated, service_role;
+grant execute on function public.mark_payment_event_processed(uuid, text, uuid, jsonb) to service_role;
