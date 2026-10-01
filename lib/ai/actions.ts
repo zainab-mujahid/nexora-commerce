@@ -4,6 +4,7 @@ import { shoppingContextSchema, type ShoppingContext } from "./context";
 import { getShoppingAssistantResponse } from "./assistant";
 import { classifyAiError, type AiErrorCategory } from "./errors";
 import { logAiEvent } from "./log";
+import { readAiMemory, resolveAiMemoryKey, saveAiMemoryTurn, type AiMemoryTurn } from "./memory";
 import { consumeAiRateLimit } from "./rate-limit";
 import type { SemanticProductSearchResult } from "./retrieval";
 
@@ -205,6 +206,13 @@ export async function askShoppingAssistant(
   const safePreviousContext: ShoppingContext | null =
     previousContext == null ? null : (shoppingContextSchema.safeParse(previousContext).data ?? null);
 
+  // Conversation memory (lib/ai/memory.ts, best-effort): resolved here, not
+  // inside the stream, because a new guest's session cookie can only be set
+  // before the response starts streaming. The key comes from the verified
+  // session or that server-issued cookie — never from `input` or
+  // `previousContext` — and null just means this turn runs without memory.
+  const memoryKey = await resolveAiMemoryKey();
+
   // Everything from here on (retrieval, grounding, generation, validation)
   // runs inside the stream, so the reply can be delivered as it's generated.
   // cancel() fires if the customer's browser goes away mid-turn; aborting
@@ -221,13 +229,40 @@ export async function askShoppingAssistant(
         }
       };
 
-      const result = await runAssistantTurn(trimmed, safePreviousContext, start, {
-        onMessageDelta: (text) => send({ type: "delta", text }),
-        signal: abort.signal,
-      });
+      // A first turn (no previous context) starts a new conversation, so
+      // there is nothing to read; otherwise the read runs alongside intent
+      // extraction and retrieval and never fails (it resolves to [] instead).
+      const history: Promise<AiMemoryTurn[]> =
+        memoryKey && safePreviousContext ? readAiMemory(memoryKey) : Promise.resolve([]);
+
+      const { result, continuesConversation } = await runAssistantTurn(
+        trimmed,
+        safePreviousContext,
+        start,
+        {
+          onMessageDelta: (text) => send({ type: "delta", text }),
+          signal: abort.signal,
+        },
+        { history },
+      );
 
       send({ type: "result", result });
       if (!abort.signal.aborted) controller.close();
+
+      // Remember the completed exchange only after the browser already has
+      // its result, so saving never delays the reply. Failed or abandoned
+      // turns aren't remembered — the same rule as the client's context.
+      if (memoryKey && !abort.signal.aborted && result.status !== "error") {
+        await saveAiMemoryTurn(
+          memoryKey,
+          {
+            user: trimmed,
+            assistant: result.message,
+            products: result.status === "ok" ? result.recommendations.map((rec) => rec.product.name) : [],
+          },
+          !continuesConversation,
+        );
+      }
     },
     cancel() {
       abort.abort();
@@ -240,14 +275,18 @@ export async function askShoppingAssistant(
 // The pipeline half of a turn, unchanged from when askShoppingAssistant()
 // ran it inline: the same outcomes, logs and safe error mapping. Never
 // throws — every failure becomes a status "error" result.
+// continuesConversation (server-side only, for conversation memory) is
+// false for an error, where nothing is remembered anyway.
 async function runAssistantTurn(
   trimmed: string,
   safePreviousContext: ShoppingContext | null,
   start: number,
   stream: { onMessageDelta: (delta: string) => void; signal: AbortSignal },
-): Promise<AssistantTurnResult> {
+  memory: { history: Promise<AiMemoryTurn[]> },
+): Promise<{ result: AssistantTurnResult; continuesConversation: boolean }> {
   try {
-    const result = await getShoppingAssistantResponse(trimmed, safePreviousContext, stream);
+    const result = await getShoppingAssistantResponse(trimmed, safePreviousContext, stream, memory);
+    const { continuesConversation } = result;
     const durationMs = Math.round(performance.now() - start);
 
     if (result.status === "no_results") {
@@ -255,7 +294,10 @@ async function runAssistantTurn(
       // found nothing" from a real failure — neither the user's request
       // text nor any product data is logged, only the outcome + timing.
       logAiEvent("info", "ai_shopping_assistant_request", { outcome: "no_results", durationMs });
-      return { status: "no_results", message: NO_RESULTS_MESSAGE, context: result.context };
+      return {
+        result: { status: "no_results", message: NO_RESULTS_MESSAGE, context: result.context },
+        continuesConversation,
+      };
     }
 
     // Step 22 Phase 8F: recommendationCount is a small integer, not the
@@ -266,10 +308,13 @@ async function runAssistantTurn(
       recommendationCount: result.recommendations.length,
     });
     return {
-      status: "ok",
-      message: result.message,
-      recommendations: result.recommendations,
-      context: result.context,
+      result: {
+        status: "ok",
+        message: result.message,
+        recommendations: result.recommendations,
+        context: result.context,
+      },
+      continuesConversation,
     };
   } catch (err) {
     // Never return err.message, err.cause, a stack trace, a provider name,
@@ -305,6 +350,6 @@ async function runAssistantTurn(
       category,
       durationMs: Math.round(performance.now() - start),
     });
-    return { status: "error", error: getSafeErrorMessage(category) };
+    return { result: { status: "error", error: getSafeErrorMessage(category) }, continuesConversation: false };
   }
 }

@@ -310,6 +310,11 @@ export type ShoppingContextSearchResult = {
   // candidates are already the unseen alternatives (same reason
   // priceReference exists: the raw request "another one" alone is ambiguous).
   alternativesExcluded: boolean;
+  // This turn's classification ("refine" continues the previous context,
+  // "new"/"clear" start over) — the same value mergeShoppingContext() just
+  // applied, passed out so conversation memory (lib/ai/memory.ts) follows
+  // the exact same continue/start-over decision as the structured context.
+  contextAction: ShoppingContextTurnInput["contextAction"];
 };
 
 // Controlled orchestration (Step 22 Phase 7E): current message + optional
@@ -372,7 +377,7 @@ export async function searchProductsWithShoppingContext(
   const context = mergeShoppingContext(previousContext, turnInput);
 
   if (!context.semanticQuery) {
-    return { context, products: [], priceReference: null, alternativesExcluded: false };
+    return { context, products: [], priceReference: null, alternativesExcluded: false, contextAction: turnInput.contextAction };
   }
 
   const priceReference = await resolvePriceReference(context.pricePreference, context.recommendedProductIds);
@@ -410,7 +415,7 @@ export async function searchProductsWithShoppingContext(
   });
 
   if (!priceReference && !excludedIds) {
-    return { context, products, priceReference: null, alternativesExcluded: false };
+    return { context, products, priceReference: null, alternativesExcluded: false, contextAction: turnInput.contextAction };
   }
 
   const filtered = products.filter(
@@ -420,5 +425,11 @@ export async function searchProductsWithShoppingContext(
   );
   const finalCap = requestedCount ?? DEFAULT_RETRIEVAL_MATCH_COUNT;
 
-  return { context, products: filtered.slice(0, finalCap), priceReference, alternativesExcluded: excludedIds !== null };
+  return {
+    context,
+    products: filtered.slice(0, finalCap),
+    priceReference,
+    alternativesExcluded: excludedIds !== null,
+    contextAction: turnInput.contextAction,
+  };
 }

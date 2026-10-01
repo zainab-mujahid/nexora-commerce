@@ -1,6 +1,7 @@
 import "server-only";
 
 import { appendShownProductIds, shoppingContextSchema, type ShoppingContext } from "./context";
+import type { AiMemoryTurn } from "./memory";
 import { generateGroundedRecommendation, type GroundedRecommendation } from "./recommend";
 import { searchProductsWithShoppingContext } from "./search";
 
@@ -14,12 +15,18 @@ export type ShoppingAssistantResponse =
   // follow-up even when they matched nothing right now — but
   // recommendedProductIds is always [] here, never stale ids left over
   // from a previous turn's actual results.
-  | { status: "no_results"; context: ShoppingContext }
+  //
+  // continuesConversation: whether this turn continued the previous context
+  // ("refine") rather than starting over ("new"/"clear", or no previous
+  // context) — tells the caller to append to conversation memory or replace
+  // it. Server-side only; lib/ai/actions.ts never returns it to the browser.
+  | { status: "no_results"; context: ShoppingContext; continuesConversation: boolean }
   | {
       status: "ok";
       message: string;
       recommendations: GroundedRecommendation[];
       context: ShoppingContext;
+      continuesConversation: boolean;
     };
 
 // Final Step 22 orchestration, reusing (not duplicating) every earlier
@@ -58,19 +65,27 @@ export type ShoppingAssistantResponse =
 // `stream` (optional) is passed straight to generateGroundedRecommendation()
 // so the chat UI can show the reply while it's generated; retrieval,
 // grounding, validation and the returned value are identical either way.
+//
+// `memory` (optional): recent turns of this conversation from Redis
+// (lib/ai/memory.ts), still loading while intent extraction and retrieval
+// run. They are handed to generateGroundedRecommendation() only when this
+// turn continues the previous context — after a "new"/"clear" turn the old
+// conversation is irrelevant, exactly as mergeShoppingContext() already
+// drops the old structured context. A failed load resolves to [] (memory is
+// best-effort), which is the same as having no memory.
 export async function getShoppingAssistantResponse(
   userInput: string,
   previousContext: ShoppingContext | null = null,
   stream?: { onMessageDelta: (delta: string) => void; signal?: AbortSignal },
+  memory?: { history: Promise<AiMemoryTurn[]> },
 ): Promise<ShoppingAssistantResponse> {
   const safePreviousContext = previousContext
     ? (shoppingContextSchema.safeParse(previousContext).data ?? null)
     : null;
 
-  const { context, products, priceReference, alternativesExcluded } = await searchProductsWithShoppingContext(
-    userInput,
-    safePreviousContext,
-  );
+  const { context, products, priceReference, alternativesExcluded, contextAction } =
+    await searchProductsWithShoppingContext(userInput, safePreviousContext);
+  const continuesConversation = safePreviousContext !== null && contextAction === "refine";
 
   if (products.length === 0) {
     // No stale recommendation ids survive into the returned context for a
@@ -81,6 +96,7 @@ export async function getShoppingAssistantResponse(
     return {
       status: "no_results",
       context: shoppingContextSchema.parse({ ...context, recommendedProductIds: [] }),
+      continuesConversation,
     };
   }
 
@@ -89,6 +105,7 @@ export async function getShoppingAssistantResponse(
     products,
     priceReference,
     alternativesExcluded,
+    conversationHistory: continuesConversation && memory ? await memory.history : [],
     stream,
   });
 
@@ -111,5 +128,5 @@ export async function getShoppingAssistantResponse(
     shownProductIds: appendShownProductIds(context.shownProductIds, verifiedIds),
   });
 
-  return { status: "ok", message, recommendations, context: updatedContext };
+  return { status: "ok", message, recommendations, context: updatedContext, continuesConversation };
 }
