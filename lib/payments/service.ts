@@ -1,0 +1,545 @@
+import "server-only";
+
+import { randomUUID } from "node:crypto";
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+import * as z from "zod";
+
+import { isPaymentError, PaymentError } from "./errors";
+import { logPaymentEvent } from "./log";
+import type { Money } from "./money";
+import type { PaymentProvider } from "./provider";
+import { getActivePaymentProvider } from "./registry";
+import {
+  beginCheckoutAsCustomer,
+  createSupabasePaymentStore,
+  type PaymentContext,
+  type PaymentEventDetails,
+  type PaymentStore,
+  type StartedCheckout,
+} from "./server/store";
+import { getPaymentsAdminClient } from "./server/supabase-admin";
+import {
+  isPaymentStatus,
+  SETTLED_PAYMENT_STATUSES,
+  type PaymentDisplaySummary,
+  type PaymentStatus,
+  type VerifiedProviderPayment,
+} from "./types";
+import { evaluateProviderPayment, type VerificationIssue } from "./verification";
+
+// Provider-independent payment orchestration: the P1 database functions on
+// one side, a PaymentProvider adapter on the other. Nothing here is specific
+// to any provider, and nothing here trusts payment data from a browser:
+//
+//   - amounts/currency always come from the checkout session in the
+//     database (begin_checkout -> create_payment_attempt);
+//   - a payment becomes "paid" only through verifyPayment(), which asks the
+//     provider directly (fetchPayment) and applies evaluateProviderPayment();
+//   - an order is only ever created by finalize_paid_checkout() after that;
+//   - events (webhooks) and redirects are hints that trigger verifyPayment(),
+//     never decisions.
+//
+// Concurrency/idempotency is delegated to the database (per-customer locks,
+// unique indexes, idempotent functions) — there is no in-memory locking, so
+// a webhook and a customer return may verify the same payment at once.
+//
+// Stock is never released here: releasing a reservation belongs to the later
+// expiry/reconciliation phase, after the provider confirms nothing was paid.
+
+export type ProviderCheckout = {
+  paymentId: string;
+  checkoutSessionId: string;
+  providerPaymentId: string;
+  redirectUrl: string;
+  money: Money;
+  // The payment attempt already existed (retry/double submit).
+  reusedAttempt: boolean;
+  // The existing provider payment was resumed instead of creating one.
+  resumedProviderPayment: boolean;
+};
+
+export type VerificationResult =
+  | { kind: "finalized"; paymentId: string; orderId: string; created: boolean }
+  | { kind: "not_paid"; paymentId: string; status: PaymentStatus }
+  | { kind: "not_bound"; paymentId: string }
+  | { kind: "status_recorded"; paymentId: string; status: PaymentStatus }
+  | { kind: "requires_review"; paymentId: string; reasons: readonly string[] }
+  | { kind: "payment_conflict"; paymentId: string };
+
+export type EventHandlingResult =
+  | { kind: "rejected" }
+  | { kind: "duplicate"; eventId: string }
+  | { kind: "ignored"; eventId: string }
+  | { kind: "processed"; eventId: string; verification: VerificationResult }
+  | { kind: "error"; eventId: string; code: string };
+
+export type PaymentService = ReturnType<typeof createPaymentService>;
+
+// ---- input validation ---------------------------------------------------------
+// strictObject: unknown keys (an "amount", "price" or "currency" a browser
+// might add) are rejected outright rather than silently ignored.
+const startCheckoutInput = z.strictObject({
+  addressId: z.uuid(),
+  idempotencyKey: z.uuid(),
+});
+
+const httpUrl = z.url({ protocol: /^https?$/ }).max(2048);
+const providerCheckoutInput = z.strictObject({
+  checkoutSessionId: z.uuid(),
+  returnUrl: httpUrl,
+  cancelUrl: httpUrl,
+});
+
+const verifyLookup = z.union([
+  z.strictObject({ paymentId: z.uuid() }),
+  z.strictObject({ providerPaymentId: z.string().min(1).max(255) }),
+]);
+
+const providerResult = z.object({
+  providerPaymentId: z.string().min(1).max(255),
+  redirectUrl: z.url({ protocol: /^https?$/ }).max(4096),
+});
+
+function parseInput<T>(schema: z.ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new PaymentError("invalid_input");
+  return parsed.data;
+}
+
+// ---- helpers --------------------------------------------------------------------
+const SAFE_TEXT = /^[\x20-\x7e]*$/;
+
+function clip(value: string | undefined, max: number): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const ascii = SAFE_TEXT.test(value) ? value : value.replace(/[^\x20-\x7e]/g, "?");
+  return ascii.slice(0, max);
+}
+
+// Mirror of the database allow-list; anything else is dropped.
+function sanitizeDisplay(display: PaymentDisplaySummary | undefined): PaymentDisplaySummary | undefined {
+  if (!display) return undefined;
+  const out: PaymentDisplaySummary = {};
+  if (display.brand) out.brand = clip(display.brand, 64);
+  if (display.method) out.method = clip(display.method, 64);
+  if (display.environment) out.environment = clip(display.environment, 64);
+  if (display.last4 && /^[0-9]{4}$/.test(display.last4)) out.last4 = display.last4;
+  for (const key of Object.keys(out) as (keyof PaymentDisplaySummary)[]) if (out[key] === undefined) delete out[key];
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// Provider calls: anything that isn't already a PaymentError becomes a
+// generic provider_unavailable — the raw error stays a non-enumerable cause.
+async function callProvider<T>(fn: () => Promise<T>, details: { paymentId?: string; provider: string }): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (isPaymentError(error)) throw error;
+    throw new PaymentError("provider_unavailable", details, { cause: error });
+  }
+}
+
+function assertVerifiedShape(verified: VerifiedProviderPayment, details: { paymentId: string; provider: string }): void {
+  const ok =
+    verified &&
+    typeof verified.provider === "string" &&
+    typeof verified.providerPaymentId === "string" &&
+    (verified.reference === null || typeof verified.reference === "string") &&
+    isPaymentStatus(verified.status) &&
+    (verified.money === null ||
+      (typeof verified.money === "object" &&
+        typeof verified.money.currency === "string" &&
+        typeof verified.money.amountMinor === "bigint")) &&
+    (verified.environment === "sandbox" || verified.environment === "live") &&
+    typeof verified.accountMatches === "boolean";
+  if (!ok) throw new PaymentError("provider_malformed_response", details);
+}
+
+export function createPaymentService(deps: { provider: PaymentProvider; store: PaymentStore }) {
+  const { provider, store } = deps;
+
+  // ---- A. internal checkout -----------------------------------------------------
+  // Reserves stock into a checkout session for the signed-in customer behind
+  // `customerDb` (their own session client). The idempotency key is generated
+  // by the application (e.g. once per rendered checkout form) so a double
+  // submit maps to the same session.
+  async function startCheckout(customerDb: SupabaseClient, input: unknown): Promise<StartedCheckout> {
+    const { addressId, idempotencyKey } = parseInput(startCheckoutInput, input);
+    const started = await beginCheckoutAsCustomer(customerDb, { addressId, idempotencyKey });
+    logPaymentEvent("info", "checkout_started", {
+      checkoutSessionId: started.checkoutSessionId,
+      status: started.status,
+      reused: started.reused,
+    });
+    return started;
+  }
+
+  // ---- B. payment attempt + provider checkout ----------------------------------
+  // `customerDb` must be the customer's own session client: the session is
+  // read through RLS first, so a customer can only pay for their own checkout.
+  async function createProviderCheckout(customerDb: SupabaseClient, input: unknown): Promise<ProviderCheckout> {
+    const { checkoutSessionId, returnUrl, cancelUrl } = parseInput(providerCheckoutInput, input);
+
+    const { data: owned, error: ownedError } = await customerDb
+      .from("checkout_sessions")
+      .select("id")
+      .eq("id", checkoutSessionId)
+      .maybeSingle();
+    if (ownedError) throw new PaymentError("database", { checkoutSessionId }, { cause: ownedError });
+    if (!owned) throw new PaymentError("not_found", { checkoutSessionId });
+
+    // Amount/currency come from the session row inside the database function.
+    const attempt = await store.createPaymentAttempt(checkoutSessionId, provider.name);
+    const base = { paymentId: attempt.paymentId, provider: provider.name };
+
+    const created = parseProviderResult(
+      await callProvider(
+        () =>
+          provider.createCheckout({
+            reference: attempt.paymentId,
+            money: attempt.money,
+            returnUrl,
+            cancelUrl,
+            existingProviderPaymentId: attempt.providerPaymentId,
+          }),
+        base,
+      ),
+      base,
+    );
+
+    if (attempt.providerPaymentId) {
+      // Resuming: the adapter must hand back the SAME provider payment.
+      if (created.providerPaymentId !== attempt.providerPaymentId) {
+        logPaymentEvent("error", "provider_resume_mismatch", { ...base, checkoutSessionId });
+        throw new PaymentError("reconciliation_required", { ...base, checkoutSessionId, providerPaymentId: created.providerPaymentId });
+      }
+      return result(attempt.providerPaymentId, created.redirectUrl, true);
+    }
+
+    try {
+      await store.attachProviderPayment(attempt.paymentId, provider.name, created.providerPaymentId);
+    } catch (error) {
+      // A concurrent request for the same attempt bound a different provider
+      // payment first: continue with THAT one (resume it) and never hand out
+      // the link we just created — the customer can only ever pay the bound
+      // payment.
+      if (isPaymentError(error) && error.details.dbCode === "PROVIDER_PAYMENT_ALREADY_BOUND") {
+        const current = await store.getPaymentContext({ paymentId: attempt.paymentId });
+        if (current?.providerPaymentId) {
+          logPaymentEvent("warn", "provider_checkout_superseded", { ...base, checkoutSessionId });
+          const resumed = parseProviderResult(
+            await callProvider(
+              () =>
+                provider.createCheckout({
+                  reference: attempt.paymentId,
+                  money: attempt.money,
+                  returnUrl,
+                  cancelUrl,
+                  existingProviderPaymentId: current.providerPaymentId,
+                }),
+              base,
+            ),
+            base,
+          );
+          if (resumed.providerPaymentId === current.providerPaymentId) {
+            return result(current.providerPaymentId, resumed.redirectUrl, true);
+          }
+        }
+      }
+      // The provider payment exists but Nexora could not record it. Do not
+      // create another one blindly; surface it for reconciliation (the
+      // provider payment carries our reference, so it can be matched later).
+      logPaymentEvent("error", "provider_payment_unrecorded", {
+        ...base,
+        checkoutSessionId,
+        dbCode: isPaymentError(error) ? error.details.dbCode : undefined,
+      });
+      throw new PaymentError(
+        "reconciliation_required",
+        { ...base, checkoutSessionId, providerPaymentId: created.providerPaymentId, dbCode: isPaymentError(error) ? error.details.dbCode : undefined },
+        { cause: error },
+      );
+    }
+
+    return result(created.providerPaymentId, created.redirectUrl, false);
+
+    function result(providerPaymentId: string, redirectUrl: string, resumed: boolean): ProviderCheckout {
+      logPaymentEvent("info", "provider_checkout_ready", { ...base, checkoutSessionId, reused: attempt.reused });
+      return {
+        paymentId: attempt.paymentId,
+        checkoutSessionId,
+        providerPaymentId,
+        redirectUrl,
+        money: attempt.money,
+        reusedAttempt: attempt.reused,
+        resumedProviderPayment: resumed,
+      };
+    }
+  }
+
+  function parseProviderResult(value: unknown, details: { paymentId: string; provider: string }) {
+    const parsed = providerResult.safeParse(value);
+    if (!parsed.success) throw new PaymentError("provider_malformed_response", details);
+    return parsed.data;
+  }
+
+  // ---- C/D/E. verification ------------------------------------------------------
+  async function verifyPayment(lookup: unknown): Promise<VerificationResult> {
+    const ref = parseInput(verifyLookup, lookup);
+    const ctx = await store.getPaymentContext(
+      "paymentId" in ref ? { paymentId: ref.paymentId } : { provider: provider.name, providerPaymentId: ref.providerPaymentId },
+    );
+    if (!ctx) throw new PaymentError("not_found", "paymentId" in ref ? { paymentId: ref.paymentId } : {});
+
+    // A payment is only ever verified by the adapter of the provider that
+    // created it.
+    if (ctx.provider !== provider.name) {
+      throw new PaymentError("configuration", { dbCode: "PAYMENT_PROVIDER_MISMATCH", paymentId: ctx.paymentId, provider: ctx.provider });
+    }
+    if (!ctx.providerPaymentId) return { kind: "not_bound", paymentId: ctx.paymentId };
+
+    const base = { paymentId: ctx.paymentId, provider: provider.name };
+    const providerPaymentId = ctx.providerPaymentId;
+    const verified = await callProvider(() => provider.fetchPayment({ providerPaymentId, reference: ctx.paymentId }), base);
+    assertVerifiedShape(verified, base);
+
+    const decision = evaluateProviderPayment(
+      {
+        provider: ctx.provider,
+        providerPaymentId,
+        reference: ctx.paymentId,
+        environment: provider.environment,
+        money: ctx.money,
+      },
+      verified,
+    );
+
+    if (decision.kind === "reject") return reject(ctx, decision.issues, verified);
+    if (decision.kind === "accept_paid") return acceptPaid(ctx, verified);
+    return recordNonPaid(ctx, verified);
+  }
+
+  async function acceptPaid(ctx: PaymentContext, verified: VerifiedProviderPayment): Promise<VerificationResult> {
+    let status: PaymentStatus;
+    try {
+      status = await store.recordPaymentStatus({
+        paymentId: ctx.paymentId,
+        status: "paid",
+        // Already proven equal to ctx.money; the database checks again.
+        verified: { currency: verified.money!.currency, amountMinor: verified.money!.amountMinor },
+        display: sanitizeDisplay(verified.display),
+      });
+    } catch (error) {
+      // e.g. refunded -> paid is not a legal transition: keep what's stored.
+      if (isPaymentError(error) && error.details.dbCode === "ILLEGAL_PAYMENT_TRANSITION") {
+        logPaymentEvent("warn", "paid_transition_refused", { paymentId: ctx.paymentId, provider: ctx.provider, status: ctx.status });
+        return ctx.status === "requires_review"
+          ? { kind: "requires_review", paymentId: ctx.paymentId, reasons: ["ALREADY_UNDER_REVIEW"] }
+          : { kind: "status_recorded", paymentId: ctx.paymentId, status: ctx.status };
+      }
+      throw error;
+    }
+
+    // The database moved it to review instead (amount/currency mismatch on
+    // its own check, or another payment for this checkout already settled).
+    if (status !== "paid") {
+      logPaymentEvent("warn", "payment_review_by_database", { paymentId: ctx.paymentId, provider: ctx.provider, status });
+      return { kind: "requires_review", paymentId: ctx.paymentId, reasons: ["DATABASE_REVIEW"] };
+    }
+
+    const { orderId, outcome } = await store.finalizePaidCheckout(ctx.paymentId);
+    logPaymentEvent("info", "payment_finalize", { paymentId: ctx.paymentId, provider: ctx.provider, outcome, orderId: orderId ?? undefined });
+    switch (outcome) {
+      case "created":
+      case "already_finalized":
+        if (!orderId) throw new PaymentError("invariant", { paymentId: ctx.paymentId, dbCode: "FINALIZED_WITHOUT_ORDER" });
+        return { kind: "finalized", paymentId: ctx.paymentId, orderId, created: outcome === "created" };
+      case "payment_conflict":
+        return { kind: "payment_conflict", paymentId: ctx.paymentId };
+      case "duplicate_payment":
+        return { kind: "requires_review", paymentId: ctx.paymentId, reasons: ["DUPLICATE_PAYMENT"] };
+      case "rejected":
+        return { kind: "requires_review", paymentId: ctx.paymentId, reasons: ["FINALIZE_INTEGRITY_MISMATCH"] };
+    }
+  }
+
+  async function recordNonPaid(ctx: PaymentContext, verified: VerifiedProviderPayment): Promise<VerificationResult> {
+    const target = verified.status;
+    const wasSettled = SETTLED_PAYMENT_STATUSES.includes(ctx.status);
+
+    // Money was recorded as received, but the provider now reports an
+    // earlier/non-paid state: never silently downgrade — review it.
+    if (wasSettled && ["pending", "processing", "failed", "cancelled", "expired"].includes(target)) {
+      return reviewWithoutEvidence(ctx, "PROVIDER_STATUS_REGRESSION");
+    }
+    if (target === "requires_review") {
+      return reviewWithoutEvidence(ctx, clip(verified.failureCode, 64) ?? "PROVIDER_REVIEW", verified.failureMessage);
+    }
+
+    try {
+      const status = await store.recordPaymentStatus({
+        paymentId: ctx.paymentId,
+        status: target,
+        failureCode: target === "failed" ? clip(verified.failureCode, 64) : undefined,
+        failureMessage: target === "failed" ? clip(verified.failureMessage, 500) : undefined,
+        display: sanitizeDisplay(verified.display),
+      });
+      logPaymentEvent("info", "payment_status_recorded", { paymentId: ctx.paymentId, provider: ctx.provider, status });
+      return target === "refunded" || target === "partially_refunded"
+        ? { kind: "status_recorded", paymentId: ctx.paymentId, status }
+        : { kind: "not_paid", paymentId: ctx.paymentId, status };
+    } catch (error) {
+      if (isPaymentError(error) && error.details.dbCode === "ILLEGAL_PAYMENT_TRANSITION") {
+        // A refund for a payment Nexora never saw as paid is an anomaly.
+        if (target === "refunded" || target === "partially_refunded") {
+          return reviewWithoutEvidence(ctx, "UNEXPECTED_REFUND");
+        }
+        // Otherwise the stored state is already further along (e.g. the
+        // reservation was released and the attempt closed): keep it.
+        logPaymentEvent("info", "payment_status_unchanged", { paymentId: ctx.paymentId, provider: ctx.provider, status: ctx.status });
+        return { kind: "not_paid", paymentId: ctx.paymentId, status: ctx.status };
+      }
+      throw error;
+    }
+  }
+
+  // Security-relevant mismatch between Nexora and the provider: no order, the
+  // payment goes to review, and the expected/received identifiers are kept
+  // as an internal audit event for investigation.
+  async function reject(ctx: PaymentContext, issues: readonly VerificationIssue[], verified: VerifiedProviderPayment): Promise<VerificationResult> {
+    logPaymentEvent("warn", "payment_verification_rejected", { paymentId: ctx.paymentId, provider: ctx.provider, issues: issues.join(",") });
+    const details: PaymentEventDetails = {
+      reason: issues.join(","),
+      environment: clip(verified.environment, 64) ?? null,
+      account_matches: verified.accountMatches === true,
+      expected_reference: ctx.paymentId,
+      received_reference: clip(verified.reference ?? undefined, 200) ?? null,
+      expected_provider_payment_id: ctx.providerPaymentId,
+      received_provider_payment_id: clip(verified.providerPaymentId, 200) ?? null,
+      expected_amount_minor: ctx.money.amountMinor.toString(),
+      received_amount_minor: typeof verified.money?.amountMinor === "bigint" ? verified.money.amountMinor.toString().slice(0, 40) : null,
+      expected_currency: ctx.money.currency,
+      received_currency: clip(verified.money?.currency, 16) ?? null,
+    };
+    try {
+      const event = await store.recordPaymentEvent({
+        provider: ctx.provider,
+        providerEventId: `internal:${randomUUID()}`,
+        eventType: "internal.verification_rejected",
+        signatureValid: true,
+        paymentId: ctx.paymentId,
+        details,
+      });
+      await store.markPaymentEventProcessed({ eventId: event.eventId, outcome: "verification_failed", paymentId: ctx.paymentId });
+    } catch (error) {
+      // The audit record is best-effort; the review transition below is not.
+      logPaymentEvent("error", "verification_audit_failed", { paymentId: ctx.paymentId, provider: ctx.provider, code: isPaymentError(error) ? error.code : "unknown" });
+    }
+    return reviewWithoutEvidence(ctx, issues[0], "Provider verification did not match the expected payment.", issues);
+  }
+
+  async function reviewWithoutEvidence(
+    ctx: PaymentContext,
+    failureCode: string,
+    failureMessage?: string,
+    reasons: readonly string[] = [failureCode],
+  ): Promise<VerificationResult> {
+    await store.recordPaymentStatus({
+      paymentId: ctx.paymentId,
+      status: "requires_review",
+      failureCode: clip(failureCode, 64),
+      failureMessage: clip(failureMessage, 500),
+    });
+    logPaymentEvent("warn", "payment_requires_review", { paymentId: ctx.paymentId, provider: ctx.provider, code: failureCode });
+    return { kind: "requires_review", paymentId: ctx.paymentId, reasons };
+  }
+
+  // ---- provider events (webhooks) ---------------------------------------------
+  // Authenticity is checked by the adapter on the RAW body. An authentic event
+  // is recorded once (duplicates are acknowledged and ignored) and then only
+  // triggers verifyPayment() for the payment it names.
+  async function handleProviderEvent(input: { rawBody: string; headers: Headers }): Promise<EventHandlingResult> {
+    let parsed;
+    try {
+      parsed = await provider.parseEvent(input);
+    } catch (error) {
+      parsed = { authentic: false as const, reason: "unparseable", claimedEventId: null, claimedEventType: null };
+      logPaymentEvent("warn", "provider_event_unparseable", { provider: provider.name, code: isPaymentError(error) ? error.code : "unknown" });
+    }
+
+    if (!parsed.authentic) {
+      await store.recordPaymentEvent({
+        provider: provider.name,
+        providerEventId: safeEventToken(parsed.claimedEventId, 255) ?? `unverified:${randomUUID()}`,
+        eventType: safeEventToken(parsed.claimedEventType, 100) ?? "unknown",
+        signatureValid: false,
+        details: { reason: clip(parsed.reason, 200) ?? "unauthentic" },
+      });
+      logPaymentEvent("warn", "provider_event_rejected", { provider: provider.name });
+      return { kind: "rejected" };
+    }
+
+    const { hint } = parsed;
+    const eventId = safeEventToken(hint.eventId, 255);
+    const eventType = safeEventToken(hint.eventType, 100) ?? "unknown";
+    if (!eventId) throw new PaymentError("provider_malformed_response", { provider: provider.name });
+
+    const recorded = await store.recordPaymentEvent({
+      provider: provider.name,
+      providerEventId: eventId,
+      eventType,
+      signatureValid: true,
+    });
+    if (recorded.duplicate) {
+      logPaymentEvent("info", "provider_event_duplicate", { provider: provider.name, eventType });
+      return { kind: "duplicate", eventId: recorded.eventId };
+    }
+
+    try {
+      const ctx = hint.providerPaymentId
+        ? await store.getPaymentContext({ provider: provider.name, providerPaymentId: hint.providerPaymentId })
+        : hint.reference && z.uuid().safeParse(hint.reference).success
+          ? await store.getPaymentContext({ paymentId: hint.reference })
+          : null;
+
+      if (!ctx) {
+        await store.markPaymentEventProcessed({ eventId: recorded.eventId, outcome: "ignored" });
+        logPaymentEvent("info", "provider_event_ignored", { provider: provider.name, eventType });
+        return { kind: "ignored", eventId: recorded.eventId };
+      }
+
+      const verification = await verifyPayment({ paymentId: ctx.paymentId });
+      await store.markPaymentEventProcessed({
+        eventId: recorded.eventId,
+        outcome: verification.kind === "requires_review" ? "verification_failed" : "processed",
+        paymentId: ctx.paymentId,
+      });
+      return { kind: "processed", eventId: recorded.eventId, verification };
+    } catch (error) {
+      const code = isPaymentError(error) ? error.code : "unknown";
+      logPaymentEvent("error", "provider_event_failed", { provider: provider.name, eventType, code });
+      await store
+        .markPaymentEventProcessed({ eventId: recorded.eventId, outcome: "error", details: { code } })
+        .catch(() => undefined);
+      return { kind: "error", eventId: recorded.eventId, code };
+    }
+  }
+
+  return { startCheckout, createProviderCheckout, verifyPayment, handleProviderEvent };
+}
+
+// Event identifiers/types from a provider: printable ASCII only, bounded.
+function safeEventToken(value: string | null | undefined, max: number): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > max) return undefined;
+  return /^[\x21-\x7e]+$/.test(value) ? value : undefined;
+}
+
+// Default wiring for the app: the configured provider + the Supabase store
+// using the payments-only secret-key client. Fails closed (PaymentError
+// 'configuration') when either is not configured.
+export function getPaymentService(): PaymentService {
+  return createPaymentService({
+    provider: getActivePaymentProvider(),
+    store: createSupabasePaymentStore(getPaymentsAdminClient()),
+  });
+}
