@@ -68,6 +68,7 @@ export async function SiteHeader() {
             Shop
           </HeaderNavLink>
           {categories.length > 0 && <CategoriesMenu categories={categories} />}
+          <HeaderNavLink href="/about">About</HeaderNavLink>
         </nav>
 
         <HeaderSearchSlot className="hidden min-w-0 flex-1 justify-center md:flex">
@@ -102,6 +103,12 @@ export async function SiteHeader() {
                 </HeaderNavLink>
                 <HeaderNavLink href="/products" variant="row">
                   Shop
+                </HeaderNavLink>
+                <HeaderNavLink href="/about" variant="row">
+                  About
+                </HeaderNavLink>
+                <HeaderNavLink href="/faqs" variant="row">
+                  Help
                 </HeaderNavLink>
               </div>
               {categories.length > 0 && (

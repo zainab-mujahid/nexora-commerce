@@ -775,6 +775,61 @@
     color: var(--footer-subtle);
   }
 
+  /* Information & policy pages (app/_components/info-page.tsx). Reading
+     rhythm for plain p/ul/h3/a markup, from the existing tokens. */
+  .info-prose p,
+  .info-prose li {
+    color: var(--muted);
+    font-size: 0.9375rem;
+    line-height: 1.75;
+    text-wrap: pretty;
+  }
+  .info-prose h3 {
+    margin-top: 0.25rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--foreground);
+  }
+  .info-prose ul {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-left: 1.125rem;
+    list-style: disc;
+  }
+  .info-prose li::marker {
+    color: var(--subtle);
+  }
+  .info-prose strong {
+    color: var(--foreground);
+    font-weight: 600;
+  }
+  .info-prose a:not(.btn) {
+    color: var(--foreground);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklab, currentColor 35%, transparent);
+    text-underline-offset: 0.2em;
+    transition: text-decoration-color 150ms;
+  }
+  .info-prose a:not(.btn):hover {
+    text-decoration-color: currentColor;
+  }
+  /* Support callout and contact cards: the card surface with one faint
+     champagne glow in the corner, echoing the footer's warmth. */
+  .info-callout {
+    background:
+      radial-gradient(80% 120% at 100% 0%, color-mix(in oklab, var(--accent) 7%, transparent), transparent 65%),
+      var(--surface);
+  }
+  /* Stand-in for an About page image that hasn't been added yet
+     (app/_components/editorial-image.tsx): a soft tonal panel, not a
+     broken image. */
+  .editorial-placeholder {
+    background:
+      radial-gradient(70% 90% at 30% 20%, color-mix(in oklab, var(--accent) 9%, transparent), transparent 70%),
+      linear-gradient(160deg, var(--fill), color-mix(in oklab, var(--fill) 60%, var(--border)));
+  }
+
   /* ---- Admin (operational workspace only) ---- */
   /* Numeric table cells: right-aligned, fixed-width digits. */
   .data-table .cell-num {
