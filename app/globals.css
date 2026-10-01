@@ -688,6 +688,93 @@
     }
   }
 
+  /* Site footer (app/_components/site-footer.tsx): the closing section of
+     every page, echoing the hero carousel's palette (graphite, stone, warm
+     greige) without its imagery. Colors are footer-local variables, so the
+     global tokens are untouched. Light: off-white settling into warm greige.
+     Dark: graphite warming slightly toward the bottom, lit from above by a
+     faint greige glow. A hairline champagne highlight marks the top edge.
+     Text colors are warm counterparts of --muted/--subtle, each >= 4.5:1
+     on every part of its gradient. */
+  .site-footer {
+    --footer-top: #f8f6f2;
+    --footer-bottom: #ebe6de;
+    --footer-glow: rgb(255 255 255 / 0.75);
+    --footer-warmth: color-mix(in oklab, #d9cdbb 45%, transparent);
+    --footer-edge: #e2dcd2;
+    --footer-highlight: color-mix(in oklab, var(--accent) 35%, transparent);
+    --footer-rule: color-mix(in oklab, #8b7f6d 20%, transparent);
+    --footer-muted: #57524a;
+    --footer-subtle: #655f56;
+    position: relative;
+    border-top: 1px solid var(--footer-edge);
+    background:
+      radial-gradient(55% 120% at 12% 0%, var(--footer-glow), transparent 70%),
+      radial-gradient(60% 110% at 95% 100%, var(--footer-warmth), transparent 70%),
+      linear-gradient(to bottom, var(--footer-top), var(--footer-bottom));
+    color: var(--foreground);
+  }
+  [data-theme="dark"] .site-footer {
+    --footer-top: #15171b;
+    --footer-bottom: #1a1917;
+    --footer-glow: color-mix(in oklab, #cbbba2 7%, transparent);
+    --footer-warmth: color-mix(in oklab, #cbbba2 4%, transparent);
+    --footer-edge: color-mix(in oklab, #cbbba2 9%, var(--border));
+    --footer-highlight: color-mix(in oklab, var(--accent) 28%, transparent);
+    --footer-rule: color-mix(in oklab, #cbbba2 10%, transparent);
+    --footer-muted: #b3ada4;
+    --footer-subtle: #9a948a;
+    background:
+      radial-gradient(70% 100% at 50% 0%, var(--footer-glow), transparent 70%),
+      radial-gradient(50% 90% at 100% 100%, var(--footer-warmth), transparent 70%),
+      linear-gradient(to bottom, var(--footer-top), var(--footer-bottom));
+  }
+  .site-footer::before {
+    content: "";
+    position: absolute;
+    inset: -1px 0 auto;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--footer-highlight) 50%, transparent);
+    pointer-events: none;
+  }
+  .site-footer-muted {
+    color: var(--footer-muted);
+  }
+  /* Small uppercase group label — the .eyebrow rhythm in footer colors. */
+  .site-footer-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--footer-subtle);
+  }
+  .site-footer-heading::before {
+    content: "";
+    width: 1rem;
+    height: 1px;
+    background: var(--accent);
+  }
+  .site-footer-link {
+    color: var(--footer-muted);
+    text-decoration-line: underline;
+    text-decoration-color: transparent;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.3em;
+    transition: color 150ms, text-decoration-color 200ms;
+  }
+  .site-footer-link:hover {
+    color: var(--foreground);
+    text-decoration-color: color-mix(in oklab, currentColor 35%, transparent);
+  }
+  .site-footer-bottom {
+    border-top: 1px solid var(--footer-rule);
+    color: var(--footer-subtle);
+  }
+
   /* ---- Admin (operational workspace only) ---- */
   /* Numeric table cells: right-aligned, fixed-width digits. */
   .data-table .cell-num {
