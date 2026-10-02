@@ -2,6 +2,7 @@ import "server-only";
 
 import { PaymentError } from "./errors";
 import type { PaymentProvider } from "./provider";
+import { createSafepayProvider } from "./providers/safepay";
 
 // Server-only provider registry. PAYMENT_PROVIDER names the adapter used for
 // NEW checkouts; it must match a registered key exactly. There is no default
@@ -12,12 +13,12 @@ import type { PaymentProvider } from "./provider";
 // credentials are only read when that provider is actually used. Test fakes
 // are never registered here — tests construct the payment service with their
 // fake directly, so a fake can never be selected through configuration.
-//
-// P3 registers Safepay: { safepay: () => createSafepayProvider() }.
 export type PaymentProviderFactory = () => PaymentProvider;
 export type PaymentProviderFactories = Readonly<Record<string, PaymentProviderFactory>>;
 
-const PROVIDER_FACTORIES: PaymentProviderFactories = Object.freeze({});
+const PROVIDER_FACTORIES: PaymentProviderFactories = Object.freeze({
+  safepay: () => createSafepayProvider(),
+});
 
 export function resolvePaymentProvider(name: string | undefined, factories: PaymentProviderFactories): PaymentProvider {
   const providerName = name?.trim();

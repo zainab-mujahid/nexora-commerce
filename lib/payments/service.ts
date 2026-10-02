@@ -9,7 +9,7 @@ import { isPaymentError, PaymentError } from "./errors";
 import { logPaymentEvent } from "./log";
 import type { Money } from "./money";
 import type { PaymentProvider } from "./provider";
-import { getActivePaymentProvider } from "./registry";
+import { getActivePaymentProvider, getPaymentProviderByName } from "./registry";
 import {
   beginCheckoutAsCustomer,
   createSupabasePaymentStore,
@@ -540,6 +540,16 @@ function safeEventToken(value: string | null | undefined, max: number): string |
 export function getPaymentService(): PaymentService {
   return createPaymentService({
     provider: getActivePaymentProvider(),
+    store: createSupabasePaymentStore(getPaymentsAdminClient()),
+  });
+}
+
+// For provider-specific entry points (e.g. a provider's webhook route): the
+// service bound to that provider regardless of which one is active for new
+// checkouts, so events for existing payments keep working after a switch.
+export function getPaymentServiceForProvider(name: string): PaymentService {
+  return createPaymentService({
+    provider: getPaymentProviderByName(name),
     store: createSupabasePaymentStore(getPaymentsAdminClient()),
   });
 }
