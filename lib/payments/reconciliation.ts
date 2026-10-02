@@ -3,7 +3,7 @@ import "server-only";
 import { isPaymentError } from "./errors";
 import { logPaymentEvent } from "./log";
 import { getActivePaymentProvider } from "./registry";
-import { createSupabasePaymentStore, type PaymentStore } from "./server/store";
+import { createSupabasePaymentStore, type PaymentStore, type RecoverableEvent } from "./server/store";
 import { getPaymentsAdminClient } from "./server/supabase-admin";
 import { getPaymentServiceForProvider, type PaymentService } from "./service";
 
@@ -117,6 +117,30 @@ export function createReconciliationService(deps: ReconciliationDeps) {
     return summary;
   }
 
+  // One recorded event, through the service's normal processing (which
+  // records the outcome on the event itself: processed / ignored /
+  // verification_failed / error). Shared by the batch and the admin retry.
+  async function recoverEvent(event: RecoverableEvent): Promise<EventRecoveryOutcome> {
+    let outcome: EventRecoveryOutcome;
+    try {
+      let providerPaymentId = event.providerPaymentId;
+      if (!providerPaymentId && event.paymentId) {
+        providerPaymentId = (await store.getPaymentContext({ paymentId: event.paymentId }))?.providerPaymentId ?? null;
+      }
+      const result = await serviceFor(event.provider).processProviderEvent({
+        eventId: event.eventId,
+        eventType: event.eventType,
+        hint: { eventId: event.providerEventId, eventType: event.eventType, providerPaymentId, reference: event.reference },
+      });
+      outcome = result.kind === "processed" ? "recovered_event" : result.kind === "ignored" ? "ignored_event" : "event_retry_scheduled";
+    } catch (error) {
+      outcome = "reconciliation_error";
+      logPaymentEvent("error", "reconciliation_error", { provider: event.provider, eventType: event.eventType, code: isPaymentError(error) ? error.code : "unknown" });
+    }
+    logPaymentEvent("info", "payment_event_recovery", { provider: event.provider, eventType: event.eventType, outcome, attempts: event.attempts });
+    return outcome;
+  }
+
   async function recoverPaymentEvents(options: { limit?: number } = {}): Promise<ReconciliationSummary<EventRecoveryOutcome>> {
     const events = await store.claimRecoverableEvents({
       limit: clampBatch(options.limit, 20),
@@ -124,30 +148,19 @@ export function createReconciliationService(deps: ReconciliationDeps) {
       maxAttempts: RECONCILE_LIMITS.eventMaxAttempts,
     });
     const summary: ReconciliationSummary<EventRecoveryOutcome> = { scanned: events.length, outcomes: {} };
-    for (const event of events) {
-      let outcome: EventRecoveryOutcome;
-      try {
-        let providerPaymentId = event.providerPaymentId;
-        if (!providerPaymentId && event.paymentId) {
-          providerPaymentId = (await store.getPaymentContext({ paymentId: event.paymentId }))?.providerPaymentId ?? null;
-        }
-        // processProviderEvent records the outcome on the event itself
-        // (processed / ignored / verification_failed / error).
-        const result = await serviceFor(event.provider).processProviderEvent({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          hint: { eventId: event.providerEventId, eventType: event.eventType, providerPaymentId, reference: event.reference },
-        });
-        outcome = result.kind === "processed" ? "recovered_event" : result.kind === "ignored" ? "ignored_event" : "event_retry_scheduled";
-      } catch (error) {
-        outcome = "reconciliation_error";
-        logPaymentEvent("error", "reconciliation_error", { provider: event.provider, eventType: event.eventType, code: isPaymentError(error) ? error.code : "unknown" });
-      }
-      bump(summary, outcome);
-      logPaymentEvent("info", "payment_event_recovery", { provider: event.provider, eventType: event.eventType, outcome, attempts: event.attempts });
-    }
+    for (const event of events) bump(summary, await recoverEvent(event));
     logPaymentEvent("info", "event_recovery_run", { summary: JSON.stringify({ scanned: summary.scanned, ...summary.outcomes }) });
     return summary;
+  }
+
+  // Admin-requested retry of ONE recorded event (Payments P6), including one
+  // that exhausted automatic recovery. Claimed through the database first, so
+  // concurrent clicks/sweeps process it at most once per lease; "not_claimable"
+  // when it is already processed, too fresh or a retry is in flight.
+  async function retryRecordedEvent(eventId: string): Promise<EventRecoveryOutcome | "not_claimable"> {
+    const event = await store.claimEventForRetry(eventId);
+    if (!event) return "not_claimable";
+    return recoverEvent(event);
   }
 
   async function runReconciliation(options: { checkoutLimit?: number; eventLimit?: number } = {}) {
@@ -156,7 +169,7 @@ export function createReconciliationService(deps: ReconciliationDeps) {
     return { events, checkouts };
   }
 
-  return { reconcileCheckout, reconcileExpiredCheckouts, recoverPaymentEvents, runReconciliation };
+  return { reconcileCheckout, reconcileExpiredCheckouts, recoverPaymentEvents, retryRecordedEvent, runReconciliation };
 }
 
 export type ReconciliationService = ReturnType<typeof createReconciliationService>;

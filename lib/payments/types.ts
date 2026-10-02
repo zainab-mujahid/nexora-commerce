@@ -32,6 +32,31 @@ export const CHECKOUT_STATUSES = [
 ] as const;
 export type CheckoutStatus = (typeof CHECKOUT_STATUSES)[number];
 
+// What the provider itself reports about a payment (Payments P6), recorded on
+// payments.provider_state after each authoritative lookup. Finer than the
+// generic status: reversed/voided/disputed all become the generic
+// 'requires_review', but support needs to know which one it was. Mirrors the
+// payments_provider_state_check constraint in supabase/schema.sql.
+export const PROVIDER_STATES = [
+  "pending",
+  "processing",
+  "paid",
+  "failed",
+  "cancelled",
+  "expired",
+  "refunded",
+  "partially_refunded",
+  "reversed",
+  "voided",
+  "disputed",
+  "review",
+] as const;
+export type ProviderState = (typeof PROVIDER_STATES)[number];
+
+export function isProviderState(value: unknown): value is ProviderState {
+  return typeof value === "string" && (PROVIDER_STATES as readonly string[]).includes(value);
+}
+
 export function isPaymentStatus(value: unknown): value is PaymentStatus {
   return typeof value === "string" && (PAYMENT_STATUSES as readonly string[]).includes(value);
 }
@@ -86,6 +111,10 @@ export type VerifiedProviderPayment = {
   // configured for (the adapter compares the provider's account identifier).
   accountMatches: boolean;
   display?: PaymentDisplaySummary;
+  // The provider's own state in generic terms, when it is finer than
+  // `status` (e.g. status 'requires_review' + providerState 'disputed').
+  // Omitted -> derived from `status`.
+  providerState?: ProviderState;
   // Short provider code / safe message for audit and support. Adapters must
   // keep these free of secrets and raw payloads.
   providerStatusCode?: string;

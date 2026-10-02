@@ -33,7 +33,15 @@ export default async function OrderDetailPage({
     paid: "Paid",
     partially_refunded: "Partially refunded",
     refunded: "Refunded",
+    requires_review: "Under review",
     not_collected: "No online payment recorded",
+  };
+  // Only states the data model knows for certain; no amounts or timings that
+  // the provider hasn't verified.
+  const paymentNote: Partial<Record<typeof order.payment_status, string>> = {
+    requires_review: "We're checking an update about this payment with our payment provider. You don't need to do anything right now.",
+    partially_refunded: "Part of this payment has been refunded.",
+    refunded: "This payment has been refunded.",
   };
 
   // Everything below is the order's own recorded data: item names and prices
@@ -120,6 +128,9 @@ export default async function OrderDetailPage({
                   </span>
                   {testMode && <TestModeBadge />}
                 </dd>
+                {paymentNote[order.payment_status] && (
+                  <dd className="text-xs leading-relaxed text-muted">{paymentNote[order.payment_status]}</dd>
+                )}
               </div>
             </dl>
           </section>

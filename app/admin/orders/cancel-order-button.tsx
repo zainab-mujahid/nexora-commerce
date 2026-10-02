@@ -9,9 +9,13 @@ const CANCELLABLE_STATUSES = new Set(["pending", "processing"]);
 export function CancelOrderButton({
   orderId,
   status,
+  paidOnline = false,
 }: {
   orderId: string;
   status: string;
+  // The order was paid online: cancelling (fulfilment + stock) does not
+  // return the money — refunds are a separate step at the provider.
+  paidOnline?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(
     cancelOrder.bind(null, orderId),
@@ -28,6 +32,11 @@ export function CancelOrderButton({
       >
         {pending ? "Cancelling…" : "Cancel order"}
       </button>
+      {canCancel && paidOnline && (
+        <p className="text-xs text-muted">
+          Cancelling restores stock but doesn&apos;t refund the payment — refunds are issued in the payment provider&apos;s dashboard.
+        </p>
+      )}
       {!canCancel && (
         <p className="text-xs text-muted">
           Only pending or processing orders can be cancelled.

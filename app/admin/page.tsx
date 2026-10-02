@@ -55,6 +55,14 @@ export default async function AdminDashboardPage() {
         </StaggerItem>
         <StaggerItem className="h-full">
           <EntryCard
+            href="/admin/payments"
+            title="Payments"
+            description="Review payment exceptions and recovery."
+            icon={icon("M3 5.5h14v9H3v-9Zm0 3h14M6 12h3")}
+          />
+        </StaggerItem>
+        <StaggerItem className="h-full">
+          <EntryCard
             href="/admin/maintenance"
             title="Maintenance"
             description="Check and repair the product search index."

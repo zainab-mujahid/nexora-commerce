@@ -11,6 +11,7 @@ import {
   type PaymentDisplaySummary,
   type PaymentProviderName,
   type PaymentStatus,
+  type ProviderState,
 } from "../types";
 
 // Typed access to the Payments P1 database interface. Every write goes
@@ -104,6 +105,12 @@ export interface PaymentStore {
   // P5 claims (bounded, skip-locked, leased): see supabase/schema.sql.
   claimExpiredCheckouts(limit: number): Promise<{ checkoutSessionId: string; attempts: number }[]>;
   claimRecoverableEvents(input: { limit: number; minAgeSeconds: number; maxAttempts: number }): Promise<RecoverableEvent[]>;
+  // P6: what the provider reported in an authoritative lookup (observation
+  // only; never changes payments.status).
+  recordProviderState(paymentId: string, state: ProviderState): Promise<void>;
+  // P6: claim ONE recorded authentic event for an admin-requested retry;
+  // null when it is not claimable (processed, too fresh, in flight, ...).
+  claimEventForRetry(eventId: string): Promise<RecoverableEvent | null>;
 }
 
 export type CheckoutSessionRow = {
@@ -172,6 +179,7 @@ const DB_CODE_MAP: Record<string, PaymentErrorCode> = {
   INVALID_ARGUMENT: "invalid_input",
   RESERVATION_NOT_EXPIRED: "conflict",
   PAYMENT_ALREADY_SETTLED: "conflict",
+  INVALID_PROVIDER_STATE: "invalid_input",
 };
 
 type DbError = { message?: string; code?: string };
@@ -371,19 +379,19 @@ export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore 
         p_max_attempts: maxAttempts,
       });
       if (error) throw toPaymentError(error);
-      return (Array.isArray(data) ? data : []).map((row) => {
-        const details = (row.details ?? {}) as Record<string, unknown>;
-        return {
-          eventId: row.event_id,
-          provider: row.provider,
-          providerEventId: row.provider_event_id,
-          eventType: row.event_type,
-          paymentId: row.payment_id ?? null,
-          providerPaymentId: typeof details.provider_payment_id === "string" ? details.provider_payment_id : null,
-          reference: typeof details.reference === "string" ? details.reference : null,
-          attempts: Number(row.process_attempts),
-        };
-      });
+      return (Array.isArray(data) ? data : []).map(recoverableEventFromRow);
+    },
+
+    async recordProviderState(paymentId, state) {
+      const { error } = await admin.rpc("record_provider_state", { p_payment_id: paymentId, p_state: state });
+      if (error) throw toPaymentError(error, { paymentId });
+    },
+
+    async claimEventForRetry(eventId) {
+      const { data, error } = await admin.rpc("claim_payment_event_for_retry", { p_event_id: eventId });
+      if (error) throw toPaymentError(error);
+      const row = Array.isArray(data) ? data[0] : null;
+      return row ? recoverableEventFromRow(row) : null;
     },
 
     async releaseCheckoutSession(checkoutSessionId, reason) {
@@ -395,6 +403,30 @@ export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore 
       if (typeof data !== "string") throw new PaymentError("invariant", { checkoutSessionId, dbCode: "UNEXPECTED_RELEASE_RESULT" });
       return data;
     },
+  };
+}
+
+// Only identifiers recorded with the event at receipt (see
+// receiveProviderEvent); never raw request data.
+function recoverableEventFromRow(row: {
+  event_id: string;
+  provider: string;
+  provider_event_id: string;
+  event_type: string;
+  payment_id: string | null;
+  details: unknown;
+  process_attempts: number | string;
+}): RecoverableEvent {
+  const details = (row.details ?? {}) as Record<string, unknown>;
+  return {
+    eventId: row.event_id,
+    provider: row.provider,
+    providerEventId: row.provider_event_id,
+    eventType: row.event_type,
+    paymentId: row.payment_id ?? null,
+    providerPaymentId: typeof details.provider_payment_id === "string" ? details.provider_payment_id : null,
+    reference: typeof details.reference === "string" ? details.reference : null,
+    attempts: Number(row.process_attempts),
   };
 }
 

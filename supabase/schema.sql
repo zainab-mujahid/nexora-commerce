@@ -1904,7 +1904,8 @@ grant execute on function public.attach_provider_payment(uuid, text, text) to se
 --   paid                      -> partially_refunded, refunded, requires_review
 --   partially_refunded        -> partially_refunded, refunded, requires_review
 --   refunded                  -> requires_review
---   requires_review           -> partially_refunded, refunded
+--   requires_review           -> partially_refunded, refunded; paid only for
+--                                the payment that owns an order (P6)
 --
 -- Anything else (e.g. paid -> failed) raises ILLEGAL_PAYMENT_TRANSITION, so a
 -- confirmed payment can never silently become failed or cancelled. A
@@ -1915,7 +1916,22 @@ grant execute on function public.attach_provider_payment(uuid, text, text) to se
 -- payment, or another payment of the same session is already settled, the
 -- payment becomes requires_review instead (stored, not raised, so the
 -- evidence survives) and the resulting status is returned.
--- Refund states are mirrored onto the linked order's payment_status.
+--
+-- Payments P6 (post-payment lifecycle), all from authoritative lookups only:
+--   * A refund reported for a payment that never settled (pending/processing/
+--     failed) is ILLEGAL (it used to hit the settled-needs-paid_at CHECK
+--     instead); the application sends it to review.
+--   * A refund reported for a payment under review that cannot be a settled
+--     payment of its checkout (never captured, or another payment of the
+--     checkout is the settled one, e.g. a refunded duplicate charge) keeps it
+--     in requires_review and returns 'requires_review'; the observed refund
+--     is visible in payments.provider_state.
+--   * requires_review -> paid only for the payment whose order already exists
+--     (e.g. a dispute the provider resolved back to paid), with the same
+--     exact amount/currency checks. It never creates a second order.
+-- The order's payment_status mirrors its own payment's paid / refund /
+-- review state. The fulfilment status (orders.status) and stock are never
+-- touched here.
 -- ============================================================================
 create or replace function public.record_payment_status(
   p_payment_id            uuid,
@@ -1965,17 +1981,30 @@ begin
   end if;
 
   v_allowed := case
-    when v_from in ('pending', 'processing', 'failed') then true
+    when v_from in ('pending', 'processing', 'failed') then p_status not in ('partially_refunded', 'refunded')
     when v_from in ('cancelled', 'expired') then p_status in ('paid', 'requires_review')
     when v_from = 'paid' then p_status in ('partially_refunded', 'refunded', 'requires_review')
     when v_from = 'partially_refunded' then p_status in ('refunded', 'requires_review')
     when v_from = 'refunded' then p_status = 'requires_review'
     when v_from = 'requires_review' then p_status in ('partially_refunded', 'refunded')
+                                          or (p_status = 'paid' and v_payment.order_id is not null)
     else false
   end;
 
   if not v_allowed then
     raise exception 'ILLEGAL_PAYMENT_TRANSITION:%->%', v_from, p_status;
+  end if;
+
+  if v_from = 'requires_review' and p_status in ('partially_refunded', 'refunded')
+     and (v_payment.paid_at is null or exists (
+       select 1 from public.payments o
+       where o.checkout_session_id = v_payment.checkout_session_id
+         and o.id <> v_payment.id
+         and o.status in ('paid', 'partially_refunded', 'refunded'))) then
+    update public.payments
+    set last_checked_at = now(), updated_at = now()
+    where id = v_payment.id;
+    return 'requires_review';
   end if;
 
   if p_status = 'paid' then
@@ -2025,6 +2054,12 @@ begin
         last_checked_at = now(),
         updated_at      = now()
     where id = v_payment.id;
+
+    if v_payment.order_id is not null then
+      update public.orders
+      set payment_status = 'paid', updated_at = now()
+      where id = v_payment.order_id and payment_status <> 'paid';
+    end if;
     return 'paid';
   end if;
 
@@ -2037,7 +2072,7 @@ begin
       updated_at      = now()
   where id = v_payment.id;
 
-  if p_status in ('partially_refunded', 'refunded') and v_payment.order_id is not null then
+  if p_status in ('partially_refunded', 'refunded', 'requires_review') and v_payment.order_id is not null then
     update public.orders
     set payment_status = p_status, updated_at = now()
     where id = v_payment.order_id;
@@ -2582,7 +2617,8 @@ begin
   )
   update public.payment_events e
   set process_attempts = e.process_attempts + 1,
-      next_attempt_at = now() + least(interval '30 minutes', interval '1 minute' * power(2, least(e.process_attempts, 5)))
+      next_attempt_at = now() + least(interval '30 minutes', interval '1 minute' * power(2, least(e.process_attempts, 5))),
+      last_claimed_at = now()
   from due
   where e.id = due.id
   returning e.id, e.provider, e.provider_event_id, e.event_type, e.payment_id, e.details, e.process_attempts;
@@ -2593,3 +2629,238 @@ revoke all on function public.claim_expired_checkouts(integer) from public, anon
 grant execute on function public.claim_expired_checkouts(integer) to service_role;
 revoke all on function public.claim_recoverable_payment_events(integer, interval, integer) from public, anon, authenticated, service_role;
 grant execute on function public.claim_recoverable_payment_events(integer, interval, integer) to service_role;
+
+-- ============================================================================
+-- Payments P6 — payment operations: provider state, review notes, manual retry
+--
+-- Operational support for exceptional payments, without any new way to move
+-- money or to set a payment status by hand:
+--   * payments.provider_state — what the provider itself last reported in an
+--     AUTHORITATIVE lookup (finer than the generic status: reversed / voided /
+--     disputed all mean status 'requires_review'). Written only by
+--     record_provider_state(), server only. An observation, never a decision.
+--   * orders.payment_status may also be 'requires_review': the order's own
+--     payment is under review (dispute, reversal, mismatch...). Kept in sync by
+--     record_payment_status(). The fulfilment status is separate and never
+--     changed by payment events.
+--   * payment_review_notes — append-only admin acknowledgements/notes on a
+--     payment or an event. Written only through admin_record_payment_review(),
+--     which checks is_admin() and snapshots the CURRENT state from the
+--     database (never from the caller). It never changes a payment, an order
+--     or stock.
+--   * claim_payment_event_for_retry() — an admin-requested retry of ONE
+--     recorded authentic event, with the same lease semantics as the P5 claim.
+--     Processing then re-runs the normal path (authoritative lookup).
+-- ============================================================================
+
+alter table public.payments add column if not exists provider_state text;
+alter table public.payments add column if not exists provider_state_at timestamptz;
+alter table public.payment_events add column if not exists last_claimed_at timestamptz;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.payments'::regclass and conname = 'payments_provider_state_check') then
+    alter table public.payments
+      add constraint payments_provider_state_check
+      check (provider_state is null or provider_state in (
+        'pending', 'processing', 'paid', 'failed', 'cancelled', 'expired',
+        'refunded', 'partially_refunded', 'reversed', 'voided', 'disputed', 'review'));
+  end if;
+
+  -- Widen orders.payment_status (P1) by one value. Re-runnable: only
+  -- replaced while the old definition is still in place.
+  if exists (select 1 from pg_constraint
+             where conrelid = 'public.orders'::regclass and conname = 'orders_payment_status_check'
+               and pg_get_constraintdef(oid) not like '%requires_review%') then
+    alter table public.orders drop constraint orders_payment_status_check;
+  end if;
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.orders'::regclass and conname = 'orders_payment_status_check') then
+    alter table public.orders
+      add constraint orders_payment_status_check
+      check (payment_status in ('paid', 'partially_refunded', 'refunded', 'requires_review', 'not_collected'));
+  end if;
+end;
+$$;
+
+-- Admin payment lists: newest first within a status.
+create index if not exists payments_status_created_idx on public.payments (status, created_at desc, id);
+
+-- ---- record_provider_state() ------------------------------------------------
+-- Stores the provider's reported state from an authoritative lookup. Never
+-- changes payments.status (record_payment_status() owns transitions).
+create or replace function public.record_provider_state(p_payment_id uuid, p_state text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_state is null or p_state not in ('pending', 'processing', 'paid', 'failed', 'cancelled', 'expired',
+                                        'refunded', 'partially_refunded', 'reversed', 'voided', 'disputed', 'review') then
+    raise exception 'INVALID_PROVIDER_STATE';
+  end if;
+
+  update public.payments
+  set provider_state = p_state, provider_state_at = now()
+  where id = p_payment_id;
+
+  if not found then
+    raise exception 'PAYMENT_NOT_FOUND';
+  end if;
+end;
+$$;
+
+revoke all on function public.record_provider_state(uuid, text) from public, anon, authenticated, service_role;
+grant execute on function public.record_provider_state(uuid, text) to service_role;
+
+-- ---- payment_review_notes ---------------------------------------------------
+-- One row per admin acknowledgement/note, about exactly one payment or one
+-- event. snapshot_* is the subject's state when the note was written (taken
+-- by the function, not supplied by the admin): an item counts as handled only
+-- while its current state still equals the latest note's snapshot, so a new
+-- provider development re-opens it.
+create table if not exists public.payment_review_notes (
+  id                      uuid primary key default gen_random_uuid(),
+  payment_id              uuid references public.payments (id) on delete cascade,
+  payment_event_id        uuid references public.payment_events (id) on delete cascade,
+  reviewed_by             uuid references auth.users (id) on delete set null,
+  resolution              text not null
+                            check (resolution in ('acknowledged', 'customer_contacted', 'refund_handled_at_provider',
+                                                  'fulfilled_manually', 'no_action_needed')),
+  note                    text check (note is null or char_length(note) between 1 and 1000),
+  snapshot_status         text not null check (char_length(snapshot_status) between 1 and 32),
+  snapshot_code           text check (char_length(snapshot_code) <= 64),
+  snapshot_provider_state text check (char_length(snapshot_provider_state) <= 32),
+  created_at              timestamptz not null default now(),
+  constraint payment_review_notes_one_subject
+    check ((payment_id is null) <> (payment_event_id is null))
+);
+
+create index if not exists payment_review_notes_payment_idx
+  on public.payment_review_notes (payment_id, created_at desc) where payment_id is not null;
+create index if not exists payment_review_notes_event_idx
+  on public.payment_review_notes (payment_event_id, created_at desc) where payment_event_id is not null;
+
+alter table public.payment_review_notes enable row level security;
+
+-- Internal operations data: admin only, never customers.
+drop policy if exists "payment_review_notes_select_admin" on public.payment_review_notes;
+create policy "payment_review_notes_select_admin" on public.payment_review_notes
+  for select using (public.is_admin());
+
+revoke all on table public.payment_review_notes from public, anon, authenticated, service_role;
+grant select on public.payment_review_notes to authenticated, service_role;
+
+-- ---- admin_record_payment_review() ------------------------------------------
+-- Called with the ADMIN's own session (like admin_cancel_order()): is_admin()
+-- is the authorization gate and must stay the first statement. Appends a note;
+-- touches nothing else.
+create or replace function public.admin_record_payment_review(
+  p_payment_id uuid,
+  p_event_id   uuid,
+  p_resolution text,
+  p_note       text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id     uuid;
+  v_status text;
+  v_code   text;
+  v_state  text;
+  v_note   text;
+begin
+  if not public.is_admin() then
+    raise exception 'ADMIN_REQUIRED';
+  end if;
+  if (p_payment_id is null) = (p_event_id is null) then
+    raise exception 'INVALID_REVIEW_SUBJECT';
+  end if;
+  if p_resolution is null or p_resolution not in ('acknowledged', 'customer_contacted', 'refund_handled_at_provider',
+                                                  'fulfilled_manually', 'no_action_needed') then
+    raise exception 'INVALID_RESOLUTION';
+  end if;
+
+  v_note := nullif(btrim(coalesce(p_note, '')), '');
+  if v_note is not null and (char_length(v_note) > 1000 or v_note ~ E'[\\x01-\\x09\\x0b-\\x1f\\x7f]') then
+    raise exception 'INVALID_NOTE';
+  end if;
+
+  if p_payment_id is not null then
+    select p.status, p.failure_code, p.provider_state into v_status, v_code, v_state
+    from public.payments p where p.id = p_payment_id;
+    if v_status is null then
+      raise exception 'PAYMENT_NOT_FOUND';
+    end if;
+  else
+    select e.outcome, e.process_attempts::text into v_status, v_code
+    from public.payment_events e where e.id = p_event_id and e.signature_valid;
+    if v_status is null then
+      raise exception 'PAYMENT_EVENT_NOT_FOUND';
+    end if;
+  end if;
+
+  insert into public.payment_review_notes
+    (payment_id, payment_event_id, reviewed_by, resolution, note, snapshot_status, snapshot_code, snapshot_provider_state)
+  values
+    (p_payment_id, p_event_id, auth.uid(), p_resolution, v_note, v_status, v_code, v_state)
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+
+revoke all on function public.admin_record_payment_review(uuid, uuid, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.admin_record_payment_review(uuid, uuid, text, text) to authenticated;
+
+-- ---- claim_payment_event_for_retry() ----------------------------------------
+-- Claims ONE authentic, not-yet-successfully-processed event for an
+-- admin-requested retry — including events that exhausted automatic
+-- recovery. Not claimable (returns no row): unauthenticated, already
+-- processed/ignored/verification_failed, received under 2 minutes ago (the
+-- webhook's own processing may still be running), claimed within the last
+-- minute (a retry is in flight), or locked by a concurrent claim. The attempt
+-- counter still increases, so a manual retry never re-enables automatic ones.
+create or replace function public.claim_payment_event_for_retry(p_event_id uuid)
+returns table (
+  event_id          uuid,
+  provider          text,
+  provider_event_id text,
+  event_type        text,
+  payment_id        uuid,
+  details           jsonb,
+  process_attempts  integer
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+begin
+  return query
+  with due as (
+    select e.id
+    from public.payment_events e
+    where e.id = p_event_id
+      and e.signature_valid
+      and e.outcome in ('received', 'error')
+      and e.received_at <= now() - interval '2 minutes'
+      and (e.last_claimed_at is null or e.last_claimed_at <= now() - interval '1 minute')
+    for update of e skip locked
+  )
+  update public.payment_events e
+  set process_attempts = e.process_attempts + 1,
+      last_claimed_at = now(),
+      next_attempt_at = greatest(coalesce(e.next_attempt_at, now()), now() + interval '1 minute')
+  from due
+  where e.id = due.id
+  returning e.id, e.provider, e.provider_event_id, e.event_type, e.payment_id, e.details, e.process_attempts;
+end;
+$$;
+
+revoke all on function public.claim_payment_event_for_retry(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.claim_payment_event_for_retry(uuid) to service_role;

@@ -31,7 +31,7 @@ export type OrderDetailItem = {
   subtotal: string;
 };
 
-export type OrderPaymentStatus = "paid" | "partially_refunded" | "refunded" | "not_collected";
+export type OrderPaymentStatus = "paid" | "partially_refunded" | "refunded" | "requires_review" | "not_collected";
 
 export type OrderDetail = {
   id: string;
@@ -195,7 +195,7 @@ export const getOrderPaymentMethod = cache(async (orderId: string): Promise<Orde
     .from("payments")
     .select("display_summary")
     .eq("order_id", orderId)
-    .in("status", ["paid", "partially_refunded", "refunded"])
+    .in("status", ["paid", "partially_refunded", "refunded", "requires_review"])
     .maybeSingle();
   if (error || !data) return null;
   const summary = data.display_summary as { brand?: unknown; last4?: unknown } | null;

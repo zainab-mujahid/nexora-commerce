@@ -25,6 +25,7 @@ import {
   type PaymentDisplaySummary,
   type PaymentStatus,
   type ProviderEventHint,
+  type ProviderState,
   type VerifiedProviderPayment,
 } from "./types";
 import { evaluateProviderPayment, type VerificationIssue } from "./verification";
@@ -334,8 +335,20 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     );
 
     if (decision.kind === "reject") return reject(ctx, decision.issues, verified);
+    // The lookup is about this payment: keep what the provider reported, for
+    // operations (P6). Best-effort — it never blocks the decision below.
+    await recordProviderState(ctx, verified);
     if (decision.kind === "accept_paid") return acceptPaid(ctx, verified);
     return recordNonPaid(ctx, verified);
+  }
+
+  async function recordProviderState(ctx: PaymentContext, verified: VerifiedProviderPayment): Promise<void> {
+    const state: ProviderState = verified.providerState ?? (verified.status === "requires_review" ? "review" : verified.status);
+    try {
+      await store.recordProviderState(ctx.paymentId, state);
+    } catch (error) {
+      logPaymentEvent("warn", "provider_state_not_recorded", { paymentId: ctx.paymentId, provider: ctx.provider, code: isPaymentError(error) ? error.code : "unknown" });
+    }
   }
 
   async function acceptPaid(ctx: PaymentContext, verified: VerifiedProviderPayment): Promise<VerificationResult> {
@@ -463,11 +476,15 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     failureMessage?: string,
     reasons: readonly string[] = [failureCode],
   ): Promise<VerificationResult> {
+    // Already under review: keep the ORIGINAL reason (e.g. a duplicate charge
+    // that is now also disputed); the new development is visible in
+    // provider_state / the event timeline.
+    const keepReason = ctx.status === "requires_review";
     await store.recordPaymentStatus({
       paymentId: ctx.paymentId,
       status: "requires_review",
-      failureCode: clip(failureCode, 64),
-      failureMessage: clip(failureMessage, 500),
+      failureCode: keepReason ? undefined : clip(failureCode, 64),
+      failureMessage: keepReason ? undefined : clip(failureMessage, 500),
     });
     logPaymentEvent("warn", "payment_requires_review", { paymentId: ctx.paymentId, provider: ctx.provider, code: failureCode });
     return { kind: "requires_review", paymentId: ctx.paymentId, reasons };

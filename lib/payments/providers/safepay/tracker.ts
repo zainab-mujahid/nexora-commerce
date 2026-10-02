@@ -1,7 +1,7 @@
 import * as z from "zod";
 
 import { PaymentError } from "../../errors";
-import type { PaymentDisplaySummary, PaymentStatus, VerifiedProviderPayment } from "../../types";
+import type { PaymentDisplaySummary, PaymentStatus, ProviderState, VerifiedProviderPayment } from "../../types";
 
 // Safepay "tracker" (one payment session) as returned by the authoritative
 // lookup GET /reporter/api/v1/payments/{tracker}, and its normalization into
@@ -60,6 +60,13 @@ export type SafepayTracker = z.infer<typeof trackerSchema>;
 // become "paid" (Safepay: "The tracker has been paid"). States that return or
 // contest money after capture go to manual review. Anything unknown is a
 // malformed response (fail closed), never a guess.
+//
+// Only STARTED, ENDED (and declined attempts on an open tracker) have been
+// observed in the sandbox. REFUNDED / PARTIAL_REFUND / REVERSED / VOIDED /
+// DISPUTED come from Safepay's documented state list and cannot be produced
+// without a destructive provider operation, so they are mapped conservatively:
+// reversal/void/dispute never become a refund here — they go to review, with
+// the specific state kept (REVIEW_STATES) for the admin.
 const STATE_MAP: Readonly<Record<string, PaymentStatus>> = Object.freeze({
   TRACKER_STARTED: "pending",
   TRACKER_ENROLLED: "processing",
@@ -72,6 +79,13 @@ const STATE_MAP: Readonly<Record<string, PaymentStatus>> = Object.freeze({
   TRACKER_REVERSED: "requires_review",
   TRACKER_VOIDED: "requires_review",
   TRACKER_DISPUTED: "requires_review",
+});
+
+// Review states: which one it was, in generic terms, plus the review code.
+const REVIEW_STATES: Readonly<Record<string, { providerState: ProviderState; code: string }>> = Object.freeze({
+  TRACKER_REVERSED: { providerState: "reversed", code: "PROVIDER_REVERSED" },
+  TRACKER_VOIDED: { providerState: "voided", code: "PROVIDER_VOIDED" },
+  TRACKER_DISPUTED: { providerState: "disputed", code: "PROVIDER_DISPUTED" },
 });
 
 export function mapTrackerState(state: string): PaymentStatus {
@@ -115,6 +129,7 @@ export function normalizeTracker(
   }
 
   const environment = tracker.environment === "sandbox" ? "sandbox" : "live";
+  const review = Object.hasOwn(REVIEW_STATES, tracker.state) ? REVIEW_STATES[tracker.state] : null;
   return {
     provider: "safepay",
     providerPaymentId: tracker.token,
@@ -126,6 +141,7 @@ export function normalizeTracker(
     environment,
     accountMatches: tracker.client?.api_key === config.apiKey,
     display: displayFrom(lastAttempt?.payment_method, environment),
+    ...(review ? { providerState: review.providerState, failureCode: review.code } : {}),
   };
 }
 

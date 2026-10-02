@@ -1,9 +1,12 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import { formatPrice } from "@/lib/catalog/format";
+import { paymentStatusBadgeClass, paymentStatusLabel, providerStateLabel } from "@/lib/admin/payment-presentation";
+import { getAdminOrderPayment } from "@/lib/admin/payment-queries";
 import { getAdminOrderById } from "@/lib/orders/queries";
 
 import { CancelOrderButton } from "../cancel-order-button";
@@ -21,6 +24,7 @@ export default async function AdminOrderDetailPage({
   if (!order) notFound();
 
   const address = order.shipping_address;
+  const payment = order.payment_status === "not_collected" ? null : await getAdminOrderPayment(order.id);
 
   // Item names/prices are order_items snapshots and the address is the
   // orders.shipping_address snapshot — the order as it was placed.
@@ -75,8 +79,27 @@ export default async function AdminOrderDetailPage({
             <h2 id="admin-order-status" className="text-base font-semibold">Status</h2>
             <OrderStatusForm orderId={order.id} status={order.status} />
             <div className="border-t border-border pt-4">
-              <CancelOrderButton orderId={order.id} status={order.status} />
+              <CancelOrderButton orderId={order.id} status={order.status} paidOnline={order.payment_status !== "not_collected"} />
             </div>
+          </section>
+
+          <section aria-labelledby="admin-order-payment" className="card flex flex-col gap-2 p-5 text-sm">
+            <h2 id="admin-order-payment" className="text-base font-semibold">Payment</h2>
+            {payment ? (
+              <>
+                <p className="flex flex-wrap items-center gap-2">
+                  <span className={paymentStatusBadgeClass(order.payment_status)}>{paymentStatusLabel(order.payment_status)}</span>
+                  {payment.providerState && providerStateLabel(payment.providerState) !== paymentStatusLabel(order.payment_status) && (
+                    <span className="text-xs text-muted">Provider: {providerStateLabel(payment.providerState)}</span>
+                  )}
+                </p>
+                <Link href={`/admin/payments/${payment.id}`} className="link-action self-start text-sm">
+                  View payment
+                </Link>
+              </>
+            ) : (
+              <p className="text-muted">No online payment recorded.</p>
+            )}
           </section>
 
           <section className="card flex flex-col gap-1 p-5 text-sm">
