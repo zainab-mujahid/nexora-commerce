@@ -65,7 +65,8 @@ export type PaymentEventDetails = Partial<
     | "reason" | "code" | "category" | "message" | "environment" | "provider_state" | "provider_event_type"
     | "http_status" | "attempt" | "reference" | "amount_minor" | "currency" | "account_matches"
     | "expected_reference" | "received_reference" | "expected_amount_minor" | "received_amount_minor"
-    | "expected_currency" | "received_currency" | "expected_provider_payment_id" | "received_provider_payment_id",
+    | "expected_currency" | "received_currency" | "expected_provider_payment_id" | "received_provider_payment_id"
+    | "provider_payment_id",
     string | number | boolean | null
   >
 >;
@@ -97,7 +98,34 @@ export interface PaymentStore {
   // P1 release_checkout_session(): restores the reservation exactly once.
   // Only call after the provider confirmed nothing was paid.
   releaseCheckoutSession(checkoutSessionId: string, reason: "cancelled" | "expired"): Promise<string>;
+  // Server-side read of one checkout session (no customer scoping — callers
+  // must have authorized the access already, e.g. the reconciliation sweep).
+  getCheckoutSession(checkoutSessionId: string): Promise<CheckoutSessionRow | null>;
+  // P5 claims (bounded, skip-locked, leased): see supabase/schema.sql.
+  claimExpiredCheckouts(limit: number): Promise<{ checkoutSessionId: string; attempts: number }[]>;
+  claimRecoverableEvents(input: { limit: number; minAgeSeconds: number; maxAttempts: number }): Promise<RecoverableEvent[]>;
 }
+
+export type CheckoutSessionRow = {
+  checkoutSessionId: string;
+  userId: string;
+  status: CheckoutStatus;
+  orderId: string | null;
+  reservedUntil: string;
+};
+
+// A recorded authentic event awaiting (re)processing — only identifiers that
+// were stored when it was received; never raw request data.
+export type RecoverableEvent = {
+  eventId: string;
+  provider: PaymentProviderName;
+  providerEventId: string;
+  eventType: string;
+  paymentId: string | null;
+  providerPaymentId: string | null;
+  reference: string | null;
+  attempts: number;
+};
 
 export type SessionPayment = {
   paymentId: string;
@@ -140,6 +168,8 @@ const DB_CODE_MAP: Record<string, PaymentErrorCode> = {
   INVALID_EVENT_OUTCOME: "invalid_input",
   PAYMENT_EVENT_NOT_FOUND: "not_found",
   INVALID_RELEASE_REASON: "invalid_input",
+  INVALID_LIMIT: "invalid_input",
+  INVALID_ARGUMENT: "invalid_input",
   RESERVATION_NOT_EXPIRED: "conflict",
   PAYMENT_ALREADY_SETTLED: "conflict",
 };
@@ -305,6 +335,55 @@ export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore 
         status: asPaymentStatus(row.status),
         orderId: row.order_id ?? null,
       }));
+    },
+
+    async getCheckoutSession(checkoutSessionId) {
+      const { data, error } = await admin
+        .from("checkout_sessions")
+        .select("id, user_id, status, order_id, reserved_until")
+        .eq("id", checkoutSessionId)
+        .maybeSingle();
+      if (error) throw toPaymentError(error, { checkoutSessionId });
+      if (!data) return null;
+      if (!isCheckoutStatus(data.status)) throw new PaymentError("invariant", { checkoutSessionId, dbCode: "UNEXPECTED_CHECKOUT_STATUS" });
+      return {
+        checkoutSessionId: data.id,
+        userId: data.user_id,
+        status: data.status,
+        orderId: data.order_id ?? null,
+        reservedUntil: data.reserved_until,
+      };
+    },
+
+    async claimExpiredCheckouts(limit) {
+      const { data, error } = await admin.rpc("claim_expired_checkouts", { p_limit: limit });
+      if (error) throw toPaymentError(error);
+      return (Array.isArray(data) ? data : []).map((row) => ({
+        checkoutSessionId: row.checkout_session_id,
+        attempts: Number(row.reconcile_attempts),
+      }));
+    },
+
+    async claimRecoverableEvents({ limit, minAgeSeconds, maxAttempts }) {
+      const { data, error } = await admin.rpc("claim_recoverable_payment_events", {
+        p_limit: limit,
+        p_min_age: `${Math.max(0, Math.floor(minAgeSeconds))} seconds`,
+        p_max_attempts: maxAttempts,
+      });
+      if (error) throw toPaymentError(error);
+      return (Array.isArray(data) ? data : []).map((row) => {
+        const details = (row.details ?? {}) as Record<string, unknown>;
+        return {
+          eventId: row.event_id,
+          provider: row.provider,
+          providerEventId: row.provider_event_id,
+          eventType: row.event_type,
+          paymentId: row.payment_id ?? null,
+          providerPaymentId: typeof details.provider_payment_id === "string" ? details.provider_payment_id : null,
+          reference: typeof details.reference === "string" ? details.reference : null,
+          attempts: Number(row.process_attempts),
+        };
+      });
     },
 
     async releaseCheckoutSession(checkoutSessionId, reason) {

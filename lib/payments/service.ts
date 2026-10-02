@@ -510,11 +510,19 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     const eventType = safeEventToken(hint.eventType, 100) ?? "unknown";
     if (!eventId) throw new PaymentError("provider_malformed_response", { provider: provider.name });
 
+    // The ids the authentic event named are kept with it, so a recorded
+    // event can be recovered later (reconciliation) without the raw request.
+    const details: PaymentEventDetails = {};
+    const namedPayment = safeEventToken(hint.providerPaymentId, 255);
+    const namedReference = safeEventToken(hint.reference, 255);
+    if (namedPayment) details.provider_payment_id = namedPayment;
+    if (namedReference) details.reference = namedReference;
     const recorded = await store.recordPaymentEvent({
       provider: provider.name,
       providerEventId: eventId,
       eventType,
       signatureValid: true,
+      details,
     });
     if (recorded.duplicate) {
       logPaymentEvent("info", "provider_event_duplicate", { provider: provider.name, eventType });
@@ -548,7 +556,14 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     } catch (error) {
       const code = isPaymentError(error) ? error.code : "unknown";
       logPaymentEvent("error", "provider_event_failed", { provider: provider.name, eventType, code });
-      await store.markPaymentEventProcessed({ eventId, outcome: "error", details: { code } }).catch(() => undefined);
+      // Keep the identifiers the event named alongside the error code: the
+      // database replaces details on update, and recovery needs them.
+      const keep: PaymentEventDetails = { code };
+      const namedPayment = safeEventToken(hint.providerPaymentId, 255);
+      const namedReference = safeEventToken(hint.reference, 255);
+      if (namedPayment) keep.provider_payment_id = namedPayment;
+      if (namedReference) keep.reference = namedReference;
+      await store.markPaymentEventProcessed({ eventId, outcome: "error", details: keep }).catch(() => undefined);
       return { kind: "error", eventId, code };
     }
   }
@@ -572,19 +587,35 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     return data as { id: string; status: string; order_id: string | null; reserved_until: string };
   }
 
-  // Stop a checkout the customer no longer wants to pay. The provider is
-  // asked FIRST about every attempt that reached it: a paid attempt is
-  // finalized instead, an attempt still being authorized blocks the release,
-  // and only when nothing can have been paid is the stock reservation
-  // released (once, by the database). A payment arriving later anyway is
-  // handled by finalize_paid_checkout's late-payment path.
-  async function cancelCheckout(customerDb: SupabaseClient, input: unknown): Promise<CancelCheckoutResult> {
-    const { checkoutSessionId } = parseInput(z.strictObject({ checkoutSessionId: z.uuid() }), input);
-    const session = await ownSession(customerDb, checkoutSessionId);
-    if (session.status === "completed" && session.order_id) return { kind: "finalized", orderId: session.order_id };
+  // ---- release decision (shared by customer cancel and the expiry sweep) -------
+  // The ONE place that decides whether an open checkout's stock reservation
+  // may be returned. Time alone never releases anything: the provider is asked
+  // FIRST about every attempt that reached it.
+  //   - paid                         -> finalize instead (order, not release)
+  //   - processing/authorizing       -> keep, try again later
+  //   - requires review / conflict   -> keep (manual review)
+  //   - provider error/timeout       -> throws (caller keeps the reservation)
+  //   - nothing paid / never reached -> release, exactly once (database)
+  // A payment that still arrives afterwards is handled by
+  // finalize_paid_checkout's late-payment path (re-reserve or conflict).
+  //
+  // mode "expiry"  : only once reserved_until has passed (else not_due);
+  //                  released as 'expired'.
+  // mode "customer": the owner's explicit cancel; released as 'cancelled'
+  //                  ('expired' if the hold had already lapsed).
+  async function reconcileCheckoutForRelease(
+    checkoutSessionId: string,
+    mode: "expiry" | "customer",
+  ): Promise<CancelCheckoutResult | { kind: "not_due" }> {
+    const session = await store.getCheckoutSession(checkoutSessionId);
+    if (!session) throw new PaymentError("not_found", { checkoutSessionId });
+    if (session.status === "completed" && session.orderId) return { kind: "finalized", orderId: session.orderId };
     if (session.status !== "awaiting_payment") return { kind: "closed", status: session.status };
+    const lapsed = new Date(session.reservedUntil).getTime() <= Date.now();
+    if (mode === "expiry" && !lapsed) return { kind: "not_due" };
 
     for (const attempt of await store.listSessionPayments(checkoutSessionId)) {
+      if (attempt.status === "requires_review") return { kind: "requires_review" };
       if (!attempt.providerPaymentId) continue; // never reached the provider
       if (attempt.provider !== provider.name) {
         throw new PaymentError("configuration", { dbCode: "PAYMENT_PROVIDER_MISMATCH", paymentId: attempt.paymentId, provider: attempt.provider });
@@ -593,18 +624,29 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
       if (result.kind === "finalized") return { kind: "finalized", orderId: result.orderId };
       if (result.kind === "requires_review" || result.kind === "payment_conflict") return { kind: "requires_review" };
       if (result.kind === "not_paid" && result.status === "processing") return { kind: "still_processing" };
+      if (result.kind === "not_paid" && result.status === "requires_review") return { kind: "requires_review" };
+      if (result.kind === "status_recorded") return { kind: "requires_review" }; // refunds on an open checkout: anomaly
     }
 
-    const reason = new Date(session.reserved_until).getTime() <= Date.now() ? "expired" : "cancelled";
+    const reason = mode === "expiry" || lapsed ? "expired" : "cancelled";
     const outcome = await store.releaseCheckoutSession(checkoutSessionId, reason);
     logPaymentEvent("info", "checkout_released", { checkoutSessionId, provider: provider.name, outcome });
     if (outcome.startsWith("noop:")) {
-      const current = await ownSession(customerDb, checkoutSessionId);
-      return current.status === "completed" && current.order_id
-        ? { kind: "finalized", orderId: current.order_id }
-        : { kind: "closed", status: current.status };
+      const current = await store.getCheckoutSession(checkoutSessionId);
+      return current?.status === "completed" && current.orderId
+        ? { kind: "finalized", orderId: current.orderId }
+        : { kind: "closed", status: current?.status ?? "unknown" };
     }
     return { kind: "released", status: reason };
+  }
+
+  // The customer's explicit "cancel checkout": ownership is checked through
+  // their own RLS-scoped client first, then the shared release decision.
+  async function cancelCheckout(customerDb: SupabaseClient, input: unknown): Promise<CancelCheckoutResult> {
+    const { checkoutSessionId } = parseInput(z.strictObject({ checkoutSessionId: z.uuid() }), input);
+    await ownSession(customerDb, checkoutSessionId);
+    const result = await reconcileCheckoutForRelease(checkoutSessionId, "customer");
+    return result.kind === "not_due" ? { kind: "closed", status: "awaiting_payment" } : result;
   }
 
   // Re-verify the latest attempt of the customer's checkout with the provider
@@ -627,6 +669,7 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     handleProviderEvent,
     cancelCheckout,
     refreshCheckout,
+    reconcileCheckoutForRelease,
   };
 }
 

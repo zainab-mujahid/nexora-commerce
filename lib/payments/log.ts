@@ -19,6 +19,8 @@ export type PaymentLogFields = {
   issues?: string;
   eventType?: string;
   reused?: boolean;
+  attempts?: number;
+  summary?: string;
 };
 
 export function logPaymentEvent(level: "info" | "warn" | "error", event: string, fields: PaymentLogFields = {}): void {

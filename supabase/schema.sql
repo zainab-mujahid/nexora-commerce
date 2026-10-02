@@ -1288,7 +1288,11 @@ as $$
               'expected_reference', 'received_reference',
               'expected_amount_minor', 'received_amount_minor',
               'expected_currency', 'received_currency',
-              'expected_provider_payment_id', 'received_provider_payment_id'
+              'expected_provider_payment_id', 'received_provider_payment_id',
+              -- Payments P5: the provider payment id an AUTHENTIC event named,
+              -- kept so a recorded-but-unprocessed event can be recovered
+              -- later without re-reading any raw request input.
+              'provider_payment_id'
             ])
          or jsonb_typeof(e.value) not in ('string', 'number', 'boolean', 'null')
          or (jsonb_typeof(e.value) = 'string' and char_length(e.value #>> '{}') > 500)
@@ -2437,3 +2441,155 @@ revoke all on function public.record_payment_event(text, text, text, boolean, uu
 grant execute on function public.record_payment_event(text, text, text, boolean, uuid, jsonb) to service_role;
 revoke all on function public.mark_payment_event_processed(uuid, text, uuid, jsonb) from public, anon, authenticated, service_role;
 grant execute on function public.mark_payment_event_processed(uuid, text, uuid, jsonb) to service_role;
+
+-- ============================================================================
+-- Payments P5 — reconciliation of expired checkouts and unprocessed events
+--
+-- Two operational gaps closed here, without changing any P1 invariant:
+--   1. an abandoned checkout keeps its 60-minute stock reservation until
+--      something acts on it;
+--   2. a webhook event is recorded before it is processed (the webhook route
+--      acknowledges first), so a crash/downstream failure can leave it
+--      unprocessed or errored.
+--
+-- These functions only CLAIM work. Deciding what to do — always after an
+-- authoritative provider lookup — stays in the application's payment service,
+-- which then uses the existing P1 functions (finalize_paid_checkout,
+-- release_checkout_session, record_payment_status, mark_payment_event_
+-- processed). Reaching reserved_until never releases stock by itself.
+--
+-- Claiming: `for update skip locked` + a lease. Each claim sets a retry time
+-- (exponential backoff, capped) on the claimed rows in the same statement, so
+-- overlapping workers never pick the same row, and a worker that dies simply
+-- lets its lease lapse. Everything downstream is idempotent anyway; the claim
+-- prevents duplicate provider calls, it is not what keeps money/stock safe.
+-- ============================================================================
+
+alter table public.checkout_sessions add column if not exists reconcile_after timestamptz;
+alter table public.checkout_sessions add column if not exists reconcile_attempts integer not null default 0;
+alter table public.payment_events add column if not exists process_attempts integer not null default 0;
+alter table public.payment_events add column if not exists next_attempt_at timestamptz;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.checkout_sessions'::regclass and conname = 'checkout_sessions_reconcile_attempts_check') then
+    alter table public.checkout_sessions
+      add constraint checkout_sessions_reconcile_attempts_check check (reconcile_attempts >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.payment_events'::regclass and conname = 'payment_events_process_attempts_check') then
+    alter table public.payment_events
+      add constraint payment_events_process_attempts_check check (process_attempts >= 0);
+  end if;
+end;
+$$;
+
+-- Authentic events still waiting for (successful) processing.
+create index if not exists payment_events_recoverable_idx
+  on public.payment_events (received_at, id)
+  where signature_valid and outcome in ('received', 'error');
+
+-- ---- claim_expired_checkouts() ---------------------------------------------
+-- Up to p_limit checkouts whose reservation deadline has passed and that are
+-- due for (another) reconciliation attempt, oldest deadline first. Checkouts
+-- with a payment under manual review are left alone (stock stays reserved for
+-- the reviewer). Each claimed row's next attempt is pushed out by
+-- min(1 min * 2^attempts, 30 min).
+create or replace function public.claim_expired_checkouts(p_limit integer)
+returns table (checkout_session_id uuid, reconcile_attempts integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+begin
+  if p_limit is null or p_limit < 1 or p_limit > 100 then
+    raise exception 'INVALID_LIMIT';
+  end if;
+
+  return query
+  with due as (
+    select s.id
+    from public.checkout_sessions s
+    where s.status = 'awaiting_payment'
+      and s.reserved_until <= now()
+      and (s.reconcile_after is null or s.reconcile_after <= now())
+      and not exists (
+        select 1 from public.payments p
+        where p.checkout_session_id = s.id and p.status = 'requires_review'
+      )
+    order by s.reserved_until, s.id
+    limit p_limit
+    for update of s skip locked
+  )
+  update public.checkout_sessions s
+  set reconcile_attempts = s.reconcile_attempts + 1,
+      reconcile_after = now() + least(interval '30 minutes', interval '1 minute' * power(2, least(s.reconcile_attempts, 5)))
+  from due
+  where s.id = due.id
+  returning s.id, s.reconcile_attempts;
+end;
+$$;
+
+-- ---- claim_recoverable_payment_events() ------------------------------------
+-- Up to p_limit AUTHENTIC events that were recorded but never processed
+-- (outcome 'received', older than p_min_age so the webhook's own after-
+-- response processing has had its chance) or whose processing failed
+-- (outcome 'error'), with fewer than p_max_attempts recovery attempts and due
+-- for retry. Unauthenticated (signature_valid = false) rows are never
+-- returned. Only identifiers recorded at receipt are returned — never raw
+-- request data.
+create or replace function public.claim_recoverable_payment_events(
+  p_limit        integer,
+  p_min_age      interval,
+  p_max_attempts integer
+)
+returns table (
+  event_id          uuid,
+  provider          text,
+  provider_event_id text,
+  event_type        text,
+  payment_id        uuid,
+  details           jsonb,
+  process_attempts  integer
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+begin
+  if p_limit is null or p_limit < 1 or p_limit > 100 then
+    raise exception 'INVALID_LIMIT';
+  end if;
+  if p_min_age is null or p_min_age < interval '0' or p_max_attempts is null or p_max_attempts < 1 then
+    raise exception 'INVALID_ARGUMENT';
+  end if;
+
+  return query
+  with due as (
+    select e.id
+    from public.payment_events e
+    where e.signature_valid
+      and e.outcome in ('received', 'error')
+      and e.received_at <= now() - p_min_age
+      and e.process_attempts < p_max_attempts
+      and (e.next_attempt_at is null or e.next_attempt_at <= now())
+    order by e.received_at, e.id
+    limit p_limit
+    for update of e skip locked
+  )
+  update public.payment_events e
+  set process_attempts = e.process_attempts + 1,
+      next_attempt_at = now() + least(interval '30 minutes', interval '1 minute' * power(2, least(e.process_attempts, 5)))
+  from due
+  where e.id = due.id
+  returning e.id, e.provider, e.provider_event_id, e.event_type, e.payment_id, e.details, e.process_attempts;
+end;
+$$;
+
+revoke all on function public.claim_expired_checkouts(integer) from public, anon, authenticated, service_role;
+grant execute on function public.claim_expired_checkouts(integer) to service_role;
+revoke all on function public.claim_recoverable_payment_events(integer, interval, integer) from public, anon, authenticated, service_role;
+grant execute on function public.claim_recoverable_payment_events(integer, interval, integer) to service_role;

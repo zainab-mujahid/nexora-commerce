@@ -98,11 +98,13 @@ export default async function CheckoutPaymentPage({
       actions = open({ canResume: false, canCancel: false, autoCheck: true });
       break;
     case "expired_pending":
-      tone = "warning";
+      // The hold time has passed but nothing has been decided yet: we only
+      // release after the provider confirms no payment was made.
+      tone = "progress";
       icon = "clock";
-      title = "Checkout expired";
-      message = "The time to pay for this checkout has run out. If you did pay, check again; otherwise release it and start over from your cart.";
-      actions = open({ canResume: false, cancelLabel: "Release and start over" });
+      title = "Confirming your payment";
+      message = "The time to pay for this checkout has ended. We're checking with the payment provider whether a payment was completed before we release your items — please don't pay again.";
+      actions = open({ canResume: false, autoCheck: true, cancelLabel: "I didn't pay — release my items" });
       break;
     case "cancelled":
       icon = "x";
@@ -113,9 +115,14 @@ export default async function CheckoutPaymentPage({
     case "expired":
       tone = "warning";
       icon = "clock";
-      title = "Checkout expired";
-      message = "The reserved items were released and no payment was taken. Your cart hasn't changed.";
-      actions = <Link href="/cart" className="btn btn-primary btn-lg w-full">Back to cart</Link>;
+      title = "Your reservation expired";
+      message = "We didn't receive a completed payment within the reservation time, so the items went back on sale. Your cart hasn't changed — you can check out again whenever you're ready.";
+      actions = (
+        <div className="flex w-full flex-col gap-2">
+          <Link href="/checkout" className="btn btn-primary btn-lg w-full">Check out again</Link>
+          <Link href="/cart" className="link-action self-center text-sm">Back to cart</Link>
+        </div>
+      );
       break;
     case "review":
       tone = "warning";
