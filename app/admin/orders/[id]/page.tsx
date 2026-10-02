@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { AdminPageHeader } from "@/app/admin/_components/admin-page-header";
 import { formatPrice } from "@/lib/catalog/format";
-import { paymentStatusBadgeClass, paymentStatusLabel, providerStateLabel } from "@/lib/admin/payment-presentation";
+import { formatMinor, paymentStatusBadgeClass, paymentStatusLabel, providerStateLabel } from "@/lib/admin/payment-presentation";
 import { getAdminOrderPayment } from "@/lib/admin/payment-queries";
 import { getAdminOrderById } from "@/lib/orders/queries";
 
@@ -93,8 +93,21 @@ export default async function AdminOrderDetailPage({
                     <span className="text-xs text-muted">Provider: {providerStateLabel(payment.providerState)}</span>
                   )}
                 </p>
-                <Link href={`/admin/payments/${payment.id}`} className="link-action self-start text-sm">
-                  View payment
+                <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-muted">Paid</dt>
+                  <dd className="text-right tabular-nums">{formatMinor(payment.paidMinor, payment.currency)}</dd>
+                  <dt className="text-muted">Refunded</dt>
+                  <dd className="text-right tabular-nums">{formatMinor(payment.refundedMinor, payment.currency)}</dd>
+                </dl>
+                {order.status === "cancelled" && BigInt(payment.remainingMinor) > BigInt(0) && (
+                  <p role="status" className="rounded-md border border-warning/40 bg-fill/40 px-3 py-2 text-xs leading-relaxed">
+                    {payment.refundOpen
+                      ? "This order is cancelled and a refund is being confirmed with the provider."
+                      : `This order is cancelled, but ${formatMinor(payment.remainingMinor, payment.currency)} of its payment hasn't been refunded. Cancelling never returns money.`}
+                  </p>
+                )}
+                <Link href={`/admin/payments/${payment.id}${order.status === "cancelled" ? "#refunds" : ""}`} className="link-action self-start text-sm">
+                  {order.status === "cancelled" && BigInt(payment.remainingMinor) > BigInt(0) && !payment.refundOpen ? "Review refund" : "View payment"}
                 </Link>
               </>
             ) : (

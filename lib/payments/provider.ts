@@ -1,10 +1,12 @@
 import type {
   CreateProviderCheckoutInput,
   CreateProviderCheckoutResult,
+  CreateProviderRefundInput,
   ParsedProviderEvent,
   PaymentEnvironment,
   PaymentProviderName,
   PaymentReference,
+  ProviderRefundAttempt,
   VerifiedProviderPayment,
 } from "./types";
 
@@ -43,4 +45,11 @@ export interface PaymentProvider {
   // unparsed body and reduce it to a hint. An authentic event only tells the
   // service WHICH payment to re-fetch; it never decides anything itself.
   parseEvent(input: { rawBody: string; headers: Headers }): Promise<ParsedProviderEvent>;
+
+  // Payments P7 (optional capability): send ONE refund request for an exact
+  // amount. Called at most once per Nexora refund, never retried — if the
+  // outcome is unknown, throw (see ProviderRefundAttempt) and the refund is
+  // reconciled from fetchPayment()'s refund ledger instead. Adapters that
+  // implement this must also report `refunds` from fetchPayment().
+  createRefund?(input: CreateProviderRefundInput): Promise<ProviderRefundAttempt>;
 }

@@ -1,19 +1,27 @@
 import * as z from "zod";
 
 import { PaymentError } from "../../errors";
-import type { PaymentDisplaySummary, PaymentStatus, ProviderState, VerifiedProviderPayment } from "../../types";
+import type { PaymentDisplaySummary, PaymentStatus, ProviderRefundSnapshot, ProviderState, VerifiedProviderPayment } from "../../types";
 
 // Safepay "tracker" (one payment session) as returned by the authoritative
 // lookup GET /reporter/api/v1/payments/{tracker}, and its normalization into
 // the generic VerifiedProviderPayment. Pure — no I/O — so it is unit-tested
 // against recorded sandbox responses.
 //
-// Shape verified against Safepay sandbox responses (v1 and v2 of the
-// reporter API return the same structure): { ok, data: { token, environment,
-// state, mode, metadata.order_id.value, client.api_key, purchase_totals:
-// { quote_amount, base_amount, conversion_rate }, charge?, attempts? } }.
-// Only the fields needed for verification and safe display are parsed; the
-// rest is ignored and never logged.
+// Shape verified against Safepay sandbox responses: { ok, data: { token,
+// environment, state, mode, metadata.order_id.value, client.api_key,
+// purchase_totals: { quote_amount, base_amount, conversion_rate }, charge?,
+// attempts? } }. Only the fields needed for verification, refunds and safe
+// display are parsed; the rest is ignored and never logged.
+//
+// Refunds (Payments P7, verified in the sandbox with real refunds): once
+// captured, charge.amount is the captured amount, charge.balance the
+// remaining refundable amount, and charge.cybersource_refunds lists every
+// refund { token: "refund_…", totals: { currency, amount }, is_voided? }
+// (is_voided: true after a VOID_REFUND). Reporter v1 is used: under a
+// provider-side refund race v2 omitted refunds that v1 (and the refund
+// responses) showed, while v1 failed loudly (HTTP 500) — so v1's answer is
+// the one we trust and its failures are "unknown", never "no refunds".
 
 // Safepay amounts are integers in the currency's lowest denomination.
 const amount = z.object({ currency: z.string(), amount: z.number().int().nonnegative() });
@@ -41,7 +49,26 @@ export const trackerSchema = z.object({
     quote_amount: amount,
     base_amount: amount.optional(),
   }),
-  charge: z.object({ amount: amount.optional() }).partial().passthrough().nullish(),
+  charge: z
+    .object({
+      amount: amount.optional(),
+      // Signed on purpose: under a provider-side refund race the balance can
+      // go negative; that is evidence for review, not an unparseable answer.
+      balance: z.object({ currency: z.string(), amount: z.number().int() }).optional(),
+      cybersource_refunds: z
+        .array(
+          z.object({
+            token: z.string().regex(/^refund_[0-9a-f-]{36}$/),
+            totals: z.object({ currency: z.string(), amount: z.number().int().positive() }),
+            is_voided: z.boolean().optional(),
+          }),
+        )
+        .max(500)
+        .optional(),
+    })
+    .partial()
+    .passthrough()
+    .nullish(),
   attempts: z
     .array(
       z
@@ -61,12 +88,16 @@ export type SafepayTracker = z.infer<typeof trackerSchema>;
 // contest money after capture go to manual review. Anything unknown is a
 // malformed response (fail closed), never a guess.
 //
-// Only STARTED, ENDED (and declined attempts on an open tracker) have been
-// observed in the sandbox. REFUNDED / PARTIAL_REFUND / REVERSED / VOIDED /
-// DISPUTED come from Safepay's documented state list and cannot be produced
-// without a destructive provider operation, so they are mapped conservatively:
-// reversal/void/dispute never become a refund here — they go to review, with
-// the specific state kept (REVIEW_STATES) for the admin.
+// Observed in the sandbox: STARTED, ENDED (and declined attempts on an open
+// tracker), PARTIAL_REFUND and REFUNDED (real refunds, Payments P7), ENDED
+// again after a refund was voided, and VOIDED (VOID_CAPTURE of a captured
+// payment). REVERSED cannot be produced for a captured hosted-checkout
+// payment (Safepay: "cannot reverse tracker in state TRACKER_ENDED") and
+// DISPUTED is raised by the card issuer, never by a merchant call — both are
+// mapped from Safepay's documented state list only. Reversal/void/dispute
+// never become a refund here: they go to review, with the specific state kept
+// (REVIEW_STATES) for the admin. Refund AMOUNTS never come from the state;
+// they come from the charge's refund list (refundsFrom).
 const STATE_MAP: Readonly<Record<string, PaymentStatus>> = Object.freeze({
   TRACKER_STARTED: "pending",
   TRACKER_ENROLLED: "processing",
@@ -142,6 +173,25 @@ export function normalizeTracker(
     accountMatches: tracker.client?.api_key === config.apiKey,
     display: displayFrom(lastAttempt?.payment_method, environment),
     ...(review ? { providerState: review.providerState, failureCode: review.code } : {}),
+    ...(charged ? { refunds: refundsFrom(tracker) } : {}),
+  };
+}
+
+// The charge's refund ledger in generic terms. Only reported once money was
+// captured (a charge exists); the list is Safepay's complete record of
+// refunds for the tracker, voided ones included.
+function refundsFrom(tracker: SafepayTracker): ProviderRefundSnapshot {
+  const charge = tracker.charge;
+  const money = (m: { currency: string; amount: number } | undefined) =>
+    m ? { currency: m.currency, amountMinor: BigInt(m.amount) } : null;
+  return {
+    refunds: (charge?.cybersource_refunds ?? []).map((r) => ({
+      providerRefundId: r.token,
+      money: { currency: r.totals.currency, amountMinor: BigInt(r.totals.amount) },
+      voided: r.is_voided === true,
+    })),
+    captured: money(charge?.amount),
+    remaining: money(charge?.balance),
   };
 }
 

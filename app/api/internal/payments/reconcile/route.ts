@@ -4,9 +4,10 @@ import { isPaymentError } from "@/lib/payments/errors";
 import { logPaymentEvent } from "@/lib/payments/log";
 import { getReconciliationService } from "@/lib/payments/reconciliation";
 
-// Internal trigger for payment reconciliation (expired checkouts + recorded
-// webhook events). Meant to be called by a scheduler on the server host —
-// never by browsers. Protected by a dedicated server-only secret
+// Internal trigger for payment reconciliation (expired checkouts, recorded
+// webhook events, refunds whose outcome is still open). Meant to be called by
+// a scheduler on the server host — never by browsers. Protected by a
+// dedicated server-only secret
 // (PAYMENT_RECONCILE_SECRET, ≥ 32 chars) sent as `Authorization: Bearer …`
 // and compared in constant time. With no secret configured the endpoint does
 // not exist (404). Responses contain only outcome counts.
@@ -48,6 +49,7 @@ export async function POST(request: Request): Promise<Response> {
     const result = await getReconciliationService().runReconciliation({
       checkoutLimit: boundedInt(body.checkoutLimit, 20),
       eventLimit: boundedInt(body.eventLimit, 20),
+      refundLimit: boundedInt(body.refundLimit, 20),
     });
     return Response.json({ ok: true, ...result });
   } catch (error) {

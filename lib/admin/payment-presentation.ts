@@ -2,7 +2,7 @@
 // Pure: no data access. Everything here turns stored codes into calm,
 // specific explanations — never a raw payload, a secret or a stack trace.
 
-import { PAYMENT_STATUSES, type PaymentStatus } from "@/lib/payments/types";
+import { PAYMENT_STATUSES, REFUND_REASONS, REFUND_STATUSES, type PaymentStatus, type RefundReason, type RefundStatus } from "@/lib/payments/types";
 
 export const PAYMENT_STATUS_LABEL: Record<PaymentStatus, string> = {
   pending: "Pending",
@@ -76,7 +76,7 @@ const REVIEW_REASONS: Record<string, { title: string; detail: string }> = {
   DUPLICATE_PAYMENT: {
     title: "Second payment for an already completed checkout",
     detail:
-      "This checkout already produced an order from another payment, and this payment also succeeded. The customer was charged twice; the extra payment should be returned from the provider's dashboard.",
+      "This checkout already produced an order from another payment, and this payment also succeeded. The customer was charged twice; return this extra payment with the refund panel below. It stays listed here until you record a review.",
   },
   AMOUNT_MISMATCH: {
     title: "Paid amount differs from the checkout total",
@@ -137,6 +137,41 @@ const REVIEW_REASONS: Record<string, { title: string; detail: string }> = {
     title: "Provider no longer reports this payment as paid",
     detail: "Nexora recorded this payment as paid, but the provider now reports an earlier state. Nothing was downgraded automatically.",
   },
+  PROVIDER_REFUND_VOIDED: {
+    title: "A refund was voided at the provider",
+    detail:
+      "A refund Nexora had confirmed is now reported as voided by the provider, so that money did not reach the customer. Check the provider's dashboard and contact the customer; the refund history keeps the voided entry.",
+  },
+  REFUND_MISSING_AT_PROVIDER: {
+    title: "Confirmed refund missing at the provider",
+    detail:
+      "Nexora's refund ledger has a refund the provider no longer lists (or one it accepted long ago but never recorded). Nothing was changed automatically — compare with the provider's dashboard.",
+  },
+  REFUND_AMOUNT_MISMATCH: {
+    title: "Refund amount differs at the provider",
+    detail: "The provider reports a different amount for a refund than Nexora requested. Check the provider's dashboard before doing anything else.",
+  },
+  REFUND_MATCH_AMBIGUOUS: {
+    title: "Refund outcome is ambiguous",
+    detail:
+      "A refund's answer from the provider was lost, and the provider lists more than one refund that could be it. Nothing was guessed; identify the refund in the provider's dashboard.",
+  },
+  REFUND_BALANCE_MISMATCH: {
+    title: "Refunded total differs from the provider's balance",
+    detail: "The provider's remaining balance for this payment doesn't match Nexora's confirmed refunds. Compare the refund history with the provider's dashboard.",
+  },
+  REFUND_STATE_MISMATCH: {
+    title: "Provider's refund state doesn't match Nexora",
+    detail: "The provider's status for this payment (paid / partially refunded / refunded) disagrees with the confirmed refunds Nexora knows about.",
+  },
+  REFUND_TOTAL_EXCEEDS_PAYMENT: {
+    title: "More refunded than was paid",
+    detail: "The provider's refunds for this payment add up to more than the payment itself. Investigate in the provider's dashboard immediately.",
+  },
+  REFUND_CURRENCY_MISMATCH: {
+    title: "Refund in an unexpected currency",
+    detail: "The provider lists a refund for this payment in a different currency than the payment's.",
+  },
   UNEXPECTED_REFUND: {
     title: "Refund reported for a payment never recorded as paid",
     detail: "The provider reports a refund for a payment Nexora never saw as paid.",
@@ -175,6 +210,67 @@ export function resolutionLabel(value: string): string {
   return (REVIEW_RESOLUTIONS as readonly string[]).includes(value)
     ? REVIEW_RESOLUTION_LABEL[value as ReviewResolution]
     : "Note";
+}
+
+// ---- refunds (Payments P7) ----
+
+const REFUND_STATUS_LABEL: Record<RefundStatus, string> = {
+  requested: "Processing",
+  requires_reconciliation: "Confirming with provider",
+  succeeded: "Refunded",
+  voided: "Voided by provider",
+  failed: "Not refunded",
+};
+
+const REFUND_STATUS_BADGE: Record<RefundStatus, string> = {
+  requested: "badge badge-info",
+  requires_reconciliation: "badge badge-warning",
+  succeeded: "badge badge-success",
+  voided: "badge badge-warning",
+  failed: "badge",
+};
+
+export function refundStatusLabel(status: string): string {
+  return (REFUND_STATUSES as readonly string[]).includes(status) ? REFUND_STATUS_LABEL[status as RefundStatus] : "Unknown";
+}
+
+export function refundStatusBadgeClass(status: string): string {
+  return (REFUND_STATUSES as readonly string[]).includes(status) ? REFUND_STATUS_BADGE[status as RefundStatus] : "badge";
+}
+
+export const REFUND_REASON_LABEL: Record<RefundReason, string> = {
+  customer_request: "Customer request",
+  order_cancelled: "Order cancelled",
+  duplicate_payment: "Duplicate payment",
+  inventory_issue: "Inventory issue",
+  other: "Other",
+};
+
+export function refundReasonLabel(reason: string | null): string {
+  if (!reason) return "—";
+  return (REFUND_REASONS as readonly string[]).includes(reason) ? REFUND_REASON_LABEL[reason as RefundReason] : "Other";
+}
+
+// Why a refund did not go through / is still open (payment_refunds.failure_code).
+const REFUND_FAILURE_LABEL: Record<string, string> = {
+  PROVIDER_REJECTED: "The provider refused the refund.",
+  PROVIDER_DECLINED: "The card network declined the refund.",
+  PROVIDER_AUTH_REJECTED: "The provider rejected this server's credentials.",
+  REFUND_EXCEEDS_PROVIDER_BALANCE: "The provider's remaining refundable balance is lower than this amount.",
+  REFUND_STATE_NOT_ALLOWED: "The provider doesn't allow a refund in the payment's current state.",
+  NOT_FOUND_AT_PROVIDER: "The provider has no record of this refund, so no money was returned.",
+  REFUND_MISSING_AT_PROVIDER: "Accepted by the provider but missing from its records.",
+  REFUND_AMOUNT_MISMATCH: "The provider reported a different amount.",
+  REFUND_MATCH_AMBIGUOUS: "More than one provider refund could be this one.",
+  PROVIDER_PROVIDER_UNAVAILABLE: "No answer from the provider — confirming from its records.",
+  PROVIDER_PROVIDER_MALFORMED_RESPONSE: "Unclear answer from the provider — confirming from its records.",
+  PROVIDER_INVALID_INPUT: "The request was refused before it was sent.",
+  PROVIDER_CONFIGURATION: "The provider isn't configured on this server; nothing was sent.",
+};
+
+export function refundFailureLabel(code: string | null): string | null {
+  if (!code) return null;
+  return REFUND_FAILURE_LABEL[code] ?? "See the provider's dashboard for details.";
 }
 
 // Recorded event outcomes (payment_events.outcome).
@@ -240,6 +336,7 @@ export const PAYMENT_VIEWS = [
   "attention",
   "conflicts",
   "disputes",
+  "refunds",
   "processing",
   "paid",
   "partially_refunded",
@@ -253,6 +350,7 @@ export const PAYMENT_VIEW_LABEL: Record<PaymentView, string> = {
   attention: "Needs review",
   conflicts: "Payment conflicts",
   disputes: "Reversed · voided · disputed",
+  refunds: "Refund reconciliation",
   processing: "Processing",
   paid: "Paid",
   partially_refunded: "Partially refunded",

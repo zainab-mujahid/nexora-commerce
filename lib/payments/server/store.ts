@@ -3,15 +3,19 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { PaymentError, type PaymentErrorCode } from "../errors";
-import { minorFromDatabase, STORE_CURRENCY, usd, type Money } from "../money";
+import { minorFromDatabase, minorToSafeInteger, STORE_CURRENCY, usd, type Money } from "../money";
 import {
   isCheckoutStatus,
   isPaymentStatus,
   type CheckoutStatus,
   type PaymentDisplaySummary,
   type PaymentProviderName,
+  isRefundStatus,
   type PaymentStatus,
+  type ProviderRefundSnapshot,
   type ProviderState,
+  type RefundReason,
+  type RefundStatus,
 } from "../types";
 
 // Typed access to the Payments P1 database interface. Every write goes
@@ -28,6 +32,8 @@ export type PaymentContext = {
   money: Money;
   status: PaymentStatus;
   orderId: string | null;
+  // When the provider's lookup first confirmed money was received.
+  paidAt: string | null;
   session: {
     status: CheckoutStatus;
     money: Money;
@@ -111,7 +117,41 @@ export interface PaymentStore {
   // P6: claim ONE recorded authentic event for an admin-requested retry;
   // null when it is not claimable (processed, too fresh, in flight, ...).
   claimEventForRetry(eventId: string): Promise<RecoverableEvent | null>;
+  // P7 refunds (see supabase/schema.sql, Payments P7).
+  getRefund(refundId: string): Promise<RefundRow | null>;
+  // What the provider answered to a refund request; never final on its own.
+  recordRefundAttempt(input: RefundAttemptInput): Promise<RefundStatus>;
+  // Apply one authoritative provider lookup to the refund ledger and derive
+  // the payment's refund status from it (atomic, in the database).
+  reconcileRefunds(input: {
+    paymentId: string;
+    providerStatus: PaymentStatus;
+    snapshot: ProviderRefundSnapshot;
+  }): Promise<RefundReconcileResult>;
+  claimOpenRefunds(limit: number, maxAttempts: number): Promise<{ refundId: string; paymentId: string; provider: string; attempts: number }[]>;
 }
+
+export type RefundRow = {
+  refundId: string;
+  paymentId: string;
+  provider: PaymentProviderName;
+  providerRefundId: string | null;
+  money: Money;
+  status: RefundStatus;
+  failureCode: string | null;
+};
+
+export type RefundAttemptInput =
+  | { refundId: string; result: "accepted"; providerRefundId: string; amountMinor: bigint; currency: string }
+  | { refundId: string; result: "rejected" | "uncertain"; code: string };
+
+export type RefundReconcileResult = {
+  paymentStatus: PaymentStatus;
+  // Closed code when the provider's refund data disagreed with the ledger
+  // (the payment then went to review), else null.
+  issue: string | null;
+  changed: number;
+};
 
 export type CheckoutSessionRow = {
   checkoutSessionId: string;
@@ -180,6 +220,22 @@ const DB_CODE_MAP: Record<string, PaymentErrorCode> = {
   RESERVATION_NOT_EXPIRED: "conflict",
   PAYMENT_ALREADY_SETTLED: "conflict",
   INVALID_PROVIDER_STATE: "invalid_input",
+  // Payments P7 (refunds)
+  ADMIN_REQUIRED: "invalid_input",
+  INVALID_REFUND_AMOUNT: "invalid_input",
+  INVALID_REFUND_REASON: "invalid_input",
+  INVALID_NOTE: "invalid_input",
+  IDEMPOTENCY_KEY_REUSED: "conflict",
+  REFUND_NOT_ALLOWED: "conflict",
+  REFUND_CURRENCY_MISMATCH: "invalid_input",
+  REFUND_IN_PROGRESS: "conflict",
+  REFUND_STATE_CHANGED: "conflict",
+  REFUND_EXCEEDS_REMAINING: "invalid_input",
+  REFUND_NOT_FOUND: "not_found",
+  PROVIDER_REFUND_ID_IN_USE: "conflict",
+  PAYMENT_NOT_SETTLED: "conflict",
+  REFUND_HISTORY_IMMUTABLE: "invariant",
+  ILLEGAL_REFUND_TRANSITION: "invariant",
 };
 
 type DbError = { message?: string; code?: string };
@@ -209,7 +265,7 @@ function asPaymentStatus(value: unknown): PaymentStatus {
   return value;
 }
 
-const PAYMENT_COLUMNS = "id, checkout_session_id, user_id, provider, provider_payment_id, amount_minor, currency, status, order_id";
+const PAYMENT_COLUMNS = "id, checkout_session_id, user_id, provider, provider_payment_id, amount_minor, currency, status, order_id, paid_at";
 const SESSION_COLUMNS = "id, user_id, status, amount_minor, currency, order_id, reserved_until";
 
 export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore {
@@ -268,6 +324,7 @@ export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore 
         money: asUsd(payment.amount_minor, payment.currency),
         status: asPaymentStatus(payment.status),
         orderId: payment.order_id ?? null,
+        paidAt: payment.paid_at ?? null,
         session: {
           status: session.status,
           money: asUsd(session.amount_minor, session.currency),
@@ -394,6 +451,64 @@ export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore 
       return row ? recoverableEventFromRow(row) : null;
     },
 
+    async getRefund(refundId) {
+      const { data, error } = await admin
+        .from("payment_refunds")
+        .select("id, payment_id, provider, provider_refund_id, amount_minor, currency, status, failure_code")
+        .eq("id", refundId)
+        .maybeSingle();
+      if (error) throw toPaymentError(error);
+      return data ? refundFromRow(data) : null;
+    },
+
+    async recordRefundAttempt(input) {
+      const accepted = input.result === "accepted" ? input : null;
+      const { data, error } = await admin.rpc("record_refund_attempt", {
+        p_refund_id: input.refundId,
+        p_result: input.result,
+        p_provider_refund_id: accepted?.providerRefundId ?? null,
+        // bigint as a digit string, cast by the database (never a float).
+        p_amount_minor: accepted ? accepted.amountMinor.toString() : null,
+        p_currency: accepted?.currency ?? null,
+        p_code: input.result === "accepted" ? null : input.code,
+      });
+      if (error) throw toPaymentError(error);
+      if (!isRefundStatus(data)) throw new PaymentError("invariant", { dbCode: "UNEXPECTED_REFUND_STATUS" });
+      return data;
+    },
+
+    async reconcileRefunds({ paymentId, providerStatus, snapshot }) {
+      const { data, error } = await admin.rpc("reconcile_payment_refunds", {
+        p_payment_id: paymentId,
+        p_provider_status: providerStatus,
+        p_captured_minor: snapshot.captured ? snapshot.captured.amountMinor.toString() : null,
+        p_remaining_minor: snapshot.remaining ? snapshot.remaining.amountMinor.toString() : null,
+        // amount_minor as a JSON number: provider amounts were parsed as safe
+        // integers by the adapter; the database re-validates every element.
+        p_refunds: snapshot.refunds.map((r) => ({
+          id: r.providerRefundId,
+          amount_minor: minorToSafeInteger(r.money.amountMinor),
+          currency: r.money.currency,
+          voided: r.voided,
+        })),
+      });
+      if (error) throw toPaymentError(error, { paymentId });
+      const row = Array.isArray(data) ? data[0] : null;
+      if (!row) throw new PaymentError("invariant", { paymentId, dbCode: "NO_RECONCILE_RESULT" });
+      return { paymentStatus: asPaymentStatus(row.payment_status), issue: row.issue ?? null, changed: Number(row.changed) };
+    },
+
+    async claimOpenRefunds(limit, maxAttempts) {
+      const { data, error } = await admin.rpc("claim_open_refunds", { p_limit: limit, p_max_attempts: maxAttempts });
+      if (error) throw toPaymentError(error);
+      return (Array.isArray(data) ? data : []).map((row) => ({
+        refundId: row.refund_id,
+        paymentId: row.payment_id,
+        provider: row.provider,
+        attempts: Number(row.reconcile_attempts),
+      }));
+    },
+
     async releaseCheckoutSession(checkoutSessionId, reason) {
       const { data, error } = await admin.rpc("release_checkout_session", {
         p_checkout_session_id: checkoutSessionId,
@@ -427,6 +542,78 @@ function recoverableEventFromRow(row: {
     providerPaymentId: typeof details.provider_payment_id === "string" ? details.provider_payment_id : null,
     reference: typeof details.reference === "string" ? details.reference : null,
     attempts: Number(row.process_attempts),
+  };
+}
+
+function refundFromRow(row: {
+  id: string;
+  payment_id: string;
+  provider: string;
+  provider_refund_id: string | null;
+  amount_minor: unknown;
+  currency: unknown;
+  status: unknown;
+  failure_code: string | null;
+}): RefundRow {
+  if (!isRefundStatus(row.status)) throw new PaymentError("invariant", { dbCode: "UNEXPECTED_REFUND_STATUS" });
+  return {
+    refundId: row.id,
+    paymentId: row.payment_id,
+    provider: row.provider,
+    providerRefundId: row.provider_refund_id ?? null,
+    money: asUsd(row.amount_minor, row.currency),
+    status: row.status,
+    failureCode: row.failure_code ?? null,
+  };
+}
+
+// ---- admin-scoped ----------------------------------------------------------
+// admin_begin_payment_refund() runs with the ADMIN's own session (the
+// cookie-based client): the database checks is_admin() itself and records
+// auth.uid() as the requester. The secret key is not allowed to call it.
+export type BegunRefund = {
+  refundId: string;
+  status: RefundStatus;
+  // The same idempotency key was already used: this is that refund.
+  reused: boolean;
+  provider: PaymentProviderName;
+  providerPaymentId: string;
+  money: Money;
+};
+
+export async function beginRefundAsAdmin(
+  adminDb: SupabaseClient,
+  input: {
+    paymentId: string;
+    amountMinor: bigint;
+    currency: string;
+    reason: RefundReason;
+    note: string | null;
+    idempotencyKey: string;
+    expectedRefundedMinor: bigint;
+  },
+): Promise<BegunRefund> {
+  const { data, error } = await adminDb.rpc("admin_begin_payment_refund", {
+    p_payment_id: input.paymentId,
+    p_amount_minor: input.amountMinor.toString(),
+    p_currency: input.currency,
+    p_reason: input.reason,
+    p_note: input.note,
+    p_idempotency_key: input.idempotencyKey,
+    p_expected_refunded_minor: input.expectedRefundedMinor.toString(),
+  });
+  if (error) throw toPaymentError(error, { paymentId: input.paymentId });
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row || !isRefundStatus(row.refund_status) || typeof row.provider_payment_id !== "string") {
+    throw new PaymentError("invariant", { paymentId: input.paymentId, dbCode: "NO_REFUND_RETURNED" });
+  }
+  return {
+    refundId: row.refund_id,
+    status: row.refund_status,
+    reused: row.reused === true,
+    provider: row.provider,
+    providerPaymentId: row.provider_payment_id,
+    money: asUsd(row.amount_minor, row.currency),
   };
 }
 

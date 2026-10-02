@@ -12,6 +12,7 @@ import type { PaymentProvider } from "./provider";
 import { getActivePaymentProvider, getPaymentProviderByName } from "./registry";
 import {
   beginCheckoutAsCustomer,
+  beginRefundAsAdmin,
   createSupabasePaymentStore,
   type PaymentContext,
   type PaymentEventDetails,
@@ -21,6 +22,7 @@ import {
 import { getPaymentsAdminClient } from "./server/supabase-admin";
 import {
   isPaymentStatus,
+  REFUND_REASONS,
   SETTLED_PAYMENT_STATUSES,
   type PaymentDisplaySummary,
   type PaymentStatus,
@@ -91,6 +93,18 @@ export type EventHandlingResult =
 
 export type PaymentService = ReturnType<typeof createPaymentService>;
 
+// Outcome of an admin refund request, from the refund ledger after the
+// provider call and the confirming lookup. Only 'succeeded' means the money
+// was verifiably returned.
+export type RefundResult = { refundId: string; paymentId: string; money: Money; repeated: boolean } & (
+  | { kind: "succeeded" } //               confirmed by the provider's lookup
+  | { kind: "pending" } //                 sent; the confirming lookup is still outstanding
+  | { kind: "in_progress" } //             a repeated submit of a refund still being processed
+  | { kind: "failed"; code: string } //    refused by the provider; nothing was refunded
+  | { kind: "requires_reconciliation" } // outcome unknown; it will be settled from the provider's ledger
+  | { kind: "review"; reasons: readonly string[] } // the provider's records disagree; payment under review
+);
+
 export type ReceivedProviderEvent =
   | { kind: "rejected" }
   | { kind: "duplicate"; eventId: string }
@@ -109,6 +123,18 @@ const providerCheckoutInput = z.strictObject({
   checkoutSessionId: z.uuid(),
   returnUrl: httpUrl,
   cancelUrl: httpUrl,
+});
+
+// Refund intent from the admin UI. Amounts are integer minor units as digit
+// strings (exact; never a float). Unknown keys are rejected.
+const refundInput = z.strictObject({
+  paymentId: z.uuid(),
+  amountMinor: z.string().regex(/^[1-9][0-9]{0,11}$/),
+  currency: z.literal("USD"),
+  reason: z.enum(REFUND_REASONS),
+  note: z.string().trim().min(1).max(500).optional(),
+  idempotencyKey: z.uuid(),
+  expectedRefundedMinor: z.string().regex(/^(0|[1-9][0-9]{0,11})$/),
 });
 
 const verifyLookup = z.union([
@@ -338,8 +364,36 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     // The lookup is about this payment: keep what the provider reported, for
     // operations (P6). Best-effort — it never blocks the decision below.
     await recordProviderState(ctx, verified);
+    // P7: when the provider reports its refund ledger for money Nexora
+    // received, that ledger (not the provider's coarse status) decides refund
+    // amounts and the payment's refund status.
+    if (verified.refunds && ctx.paidAt && (SETTLED_PAYMENT_STATUSES.includes(ctx.status) || ctx.status === "requires_review")) {
+      const settled = await reconcileRefundLedger(ctx, verified);
+      if (settled) return settled;
+    }
     if (decision.kind === "accept_paid") return acceptPaid(ctx, verified);
     return recordNonPaid(ctx, verified);
+  }
+
+  // Applies the authoritative refund list to the refund ledger (database,
+  // atomic). Returns the final result for refund statuses and for any
+  // disagreement; null when the normal paid/review handling should continue
+  // (the provider reports the payment as paid with nothing refunded, or a
+  // review state such as a dispute).
+  async function reconcileRefundLedger(ctx: PaymentContext, verified: VerifiedProviderPayment): Promise<VerificationResult | null> {
+    const result = await store.reconcileRefunds({ paymentId: ctx.paymentId, providerStatus: verified.status, snapshot: verified.refunds! });
+    logPaymentEvent(result.issue ? "warn" : "info", "refund_ledger_reconciled", {
+      paymentId: ctx.paymentId,
+      provider: ctx.provider,
+      status: result.paymentStatus,
+      code: result.issue ?? undefined,
+      attempts: result.changed,
+    });
+    if (result.issue) return { kind: "requires_review", paymentId: ctx.paymentId, reasons: [result.issue] };
+    if (verified.status === "refunded" || verified.status === "partially_refunded") {
+      return { kind: "status_recorded", paymentId: ctx.paymentId, status: result.paymentStatus };
+    }
+    return null;
   }
 
   async function recordProviderState(ctx: PaymentContext, verified: VerifiedProviderPayment): Promise<void> {
@@ -488,6 +542,115 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     });
     logPaymentEvent("warn", "payment_requires_review", { paymentId: ctx.paymentId, provider: ctx.provider, code: failureCode });
     return { kind: "requires_review", paymentId: ctx.paymentId, reasons };
+  }
+
+  // ---- refunds (Payments P7) ---------------------------------------------------
+  // `adminDb` must be the ADMIN's own session client: the refund intent is
+  // recorded by admin_begin_payment_refund(), which checks is_admin() itself,
+  // records auth.uid() as the requester and enforces every amount and
+  // eligibility rule against the database. The browser only ever supplies
+  // intent (payment id, amount, reason, note, form key, the refunded total it
+  // was shown).
+  //
+  // Money moves at most once per refund: only the call that CREATED the
+  // refund row sends the provider request; a repeated submit (same form key)
+  // just reports the existing refund. The provider's answer is recorded, then
+  // confirmed by the normal authoritative lookup (verifyPayment ->
+  // reconcile_payment_refunds). If the answer is lost or unclear, the refund
+  // stays open (requires_reconciliation) and blocks further refunds of the
+  // payment until a lookup settles it — it is never re-sent.
+  async function refundPayment(adminDb: SupabaseClient, input: unknown): Promise<RefundResult> {
+    const req = parseInput(refundInput, input);
+    const create = provider.createRefund?.bind(provider);
+    if (!create) throw new PaymentError("configuration", { provider: provider.name, dbCode: "REFUNDS_NOT_SUPPORTED" });
+
+    // A payment is only ever refunded through the adapter that created it.
+    const ctx = await store.getPaymentContext({ paymentId: req.paymentId });
+    if (!ctx) throw new PaymentError("not_found", { paymentId: req.paymentId });
+    if (ctx.provider !== provider.name) {
+      throw new PaymentError("configuration", { dbCode: "PAYMENT_PROVIDER_MISMATCH", paymentId: ctx.paymentId, provider: ctx.provider });
+    }
+
+    const begun = await beginRefundAsAdmin(adminDb, {
+      paymentId: req.paymentId,
+      amountMinor: BigInt(req.amountMinor),
+      currency: req.currency,
+      reason: req.reason,
+      note: req.note ?? null,
+      idempotencyKey: req.idempotencyKey,
+      expectedRefundedMinor: BigInt(req.expectedRefundedMinor),
+    });
+    const base = { paymentId: req.paymentId, provider: provider.name, refundId: begun.refundId };
+    if (begun.reused) {
+      logPaymentEvent("info", "refund_request_repeated", { ...base, status: begun.status });
+      return refundState(begun.refundId, { repeated: true });
+    }
+    logPaymentEvent("info", "refund_requested", base);
+
+    try {
+      const attempt = await create({
+        providerPaymentId: begun.providerPaymentId,
+        reference: req.paymentId,
+        refundId: begun.refundId,
+        money: begun.money,
+      });
+      await store.recordRefundAttempt(
+        attempt.outcome === "accepted"
+          ? {
+              refundId: begun.refundId,
+              result: "accepted",
+              providerRefundId: attempt.providerRefundId,
+              amountMinor: attempt.money.amountMinor,
+              currency: attempt.money.currency,
+            }
+          : { refundId: begun.refundId, result: "rejected", code: clip(attempt.code, 64) ?? "PROVIDER_REJECTED" },
+      );
+      logPaymentEvent(attempt.outcome === "accepted" ? "info" : "warn", "refund_provider_answer", { ...base, outcome: attempt.outcome });
+    } catch (error) {
+      const code = isPaymentError(error) ? error.code : "unknown";
+      // invalid_input/configuration are raised by the adapter before any
+      // request leaves the server: nothing can have moved. Anything else
+      // (timeout, network, unusable answer, or failing to record the answer)
+      // leaves the outcome unknown.
+      const result = code === "invalid_input" || code === "configuration" ? "rejected" : "uncertain";
+      logPaymentEvent(result === "uncertain" ? "error" : "warn", "refund_provider_call_failed", { ...base, code, outcome: result });
+      await store
+        .recordRefundAttempt({ refundId: begun.refundId, result, code: `PROVIDER_${code.toUpperCase()}`.slice(0, 64) })
+        .catch((recordError) => {
+          // The refund row stays 'requested'; scheduled reconciliation will
+          // settle it from the provider's ledger.
+          logPaymentEvent("error", "refund_attempt_not_recorded", { ...base, code: isPaymentError(recordError) ? recordError.code : "unknown" });
+        });
+    }
+
+    // Confirmation: the same authoritative lookup as webhooks and re-checks.
+    let reviewReasons: readonly string[] | null = null;
+    try {
+      const verification = await verifyPayment({ paymentId: req.paymentId });
+      if (verification.kind === "requires_review") reviewReasons = verification.reasons;
+    } catch (error) {
+      logPaymentEvent("warn", "refund_confirmation_deferred", { ...base, code: isPaymentError(error) ? error.code : "unknown" });
+    }
+    return refundState(begun.refundId, { repeated: false, reviewReasons });
+  }
+
+  async function refundState(refundId: string, opts: { repeated: boolean; reviewReasons?: readonly string[] | null }): Promise<RefundResult> {
+    const row = await store.getRefund(refundId);
+    if (!row) throw new PaymentError("invariant", { dbCode: "REFUND_ROW_MISSING" });
+    const common = { refundId, paymentId: row.paymentId, money: row.money, repeated: opts.repeated };
+    switch (row.status) {
+      case "succeeded":
+        return { kind: "succeeded", ...common };
+      case "failed":
+        return { kind: "failed", ...common, code: row.failureCode ?? "PROVIDER_REJECTED" };
+      case "voided":
+        return { kind: "review", ...common, reasons: ["PROVIDER_REFUND_VOIDED"] };
+      case "requires_reconciliation":
+        return opts.reviewReasons ? { kind: "review", ...common, reasons: opts.reviewReasons } : { kind: "requires_reconciliation", ...common };
+      case "requested":
+        if (opts.reviewReasons) return { kind: "review", ...common, reasons: opts.reviewReasons };
+        return opts.repeated ? { kind: "in_progress", ...common } : { kind: "pending", ...common };
+    }
   }
 
   // ---- provider events (webhooks) ---------------------------------------------
@@ -681,6 +844,7 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
     startCheckout,
     createProviderCheckout,
     verifyPayment,
+    refundPayment,
     receiveProviderEvent,
     processProviderEvent,
     handleProviderEvent,

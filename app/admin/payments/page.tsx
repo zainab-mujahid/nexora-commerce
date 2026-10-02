@@ -16,6 +16,10 @@ import {
   paymentStatusBadgeClass,
   paymentStatusLabel,
   providerStateLabel,
+  refundFailureLabel,
+  refundReasonLabel,
+  refundStatusBadgeClass,
+  refundStatusLabel,
   resolutionLabel,
   reviewReason,
   shortProviderId,
@@ -27,8 +31,10 @@ import {
   getAttentionCounts,
   listAdminPayments,
   listAttentionEvents,
+  listRefundsToReconcile,
   type AdminEventRow,
   type AdminPaymentRow,
+  type AdminRefundRow,
   type Paged,
 } from "@/lib/admin/payment-queries";
 
@@ -42,6 +48,7 @@ const EMPTY_MESSAGE: Record<PaymentView, string> = {
   attention: "Nothing needs review right now.",
   conflicts: "No payment conflicts.",
   disputes: "No reversed, voided or disputed payments.",
+  refunds: "Every refund is settled with the provider.",
   processing: "No payments are processing.",
   paid: "No paid payments yet.",
   partially_refunded: "No partially refunded payments.",
@@ -70,16 +77,17 @@ export default async function AdminPaymentsPage({ searchParams }: PageProps<"/ad
     { view: "attention", label: "Payments needing review", count: counts.review },
     { view: "conflicts", label: "Paid, items unavailable", count: counts.conflicts },
     { view: "disputes", label: "Reversed · voided · disputed", count: counts.disputes },
+    { view: "refunds", label: "Refunds to reconcile", count: counts.refundsToReconcile },
     { view: "events", label: "Events past automatic retries", count: counts.exhaustedEvents, extra: { events: "exhausted" } },
   ];
 
   return (
     <div className="flex flex-col gap-6">
-      <AdminPageHeader description="Exceptions, provider states and recovery for online payments. Refunds are issued in the payment provider's dashboard, not here.">
+      <AdminPageHeader description="Exceptions, provider states, refunds and recovery for online payments. Refunds are issued from each payment's page and never change fulfilment or stock.">
         Payments
       </AdminPageHeader>
 
-      <ul className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         {summary.map((s) => (
           <li key={s.view}>
             <Link
@@ -114,6 +122,8 @@ export default async function AdminPaymentsPage({ searchParams }: PageProps<"/ad
 
       {view === "events" ? (
         <EventsSection filter={eventFilter} page={page} />
+      ) : view === "refunds" ? (
+        <RefundsSection page={page} />
       ) : (
         <PaymentsSection view={view} page={page} />
       )}
@@ -121,7 +131,7 @@ export default async function AdminPaymentsPage({ searchParams }: PageProps<"/ad
   );
 }
 
-async function PaymentsSection({ view, page }: { view: Exclude<PaymentView, "events">; page: number }) {
+async function PaymentsSection({ view, page }: { view: Exclude<PaymentView, "events" | "refunds">; page: number }) {
   const result = await listAdminPayments(view, page);
   const showReason = view === "attention" || view === "conflicts" || view === "disputes";
   return (
@@ -347,6 +357,80 @@ function EventsTable({ rows }: { rows: AdminEventRow[] }) {
               </tr>
             );
           })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+async function RefundsSection({ page }: { page: number }) {
+  const result = await listRefundsToReconcile(page);
+  return (
+    <section aria-labelledby="refunds-heading" className="flex flex-col gap-3">
+      <h2 id="refunds-heading" className="text-base font-semibold">
+        Refunds being confirmed <span className="font-normal text-muted tabular-nums">· {result.total}</span>
+      </h2>
+      <p className="max-w-3xl text-sm text-muted">
+        Refunds whose answer from the provider was lost or unclear. They are never sent twice: each is settled from the
+        provider&apos;s own refund records — automatically on a schedule, or right away with &ldquo;Re-check with provider&rdquo; on
+        the payment. Until then, no other refund of the same payment can be issued.
+      </p>
+      {result.rows.length === 0 ? (
+        <EmptyState message={result.total > 0 ? "This page is past the end of the list." : EMPTY_MESSAGE.refunds} />
+      ) : (
+        <RefundsTable rows={result.rows} />
+      )}
+      <Pager paged={result} hrefFor={(p) => href("refunds", { page: p })} />
+    </section>
+  );
+}
+
+function RefundsTable({ rows }: { rows: (AdminRefundRow & { exhausted: boolean })[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table data-table-stack">
+        <thead>
+          <tr>
+            <th>Refund</th>
+            <th className="cell-num">Amount</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th className="cell-num">Checks</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id}>
+              <td>
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-mono text-xs">#{shortRef(r.id)}</span>
+                  <span className="text-xs text-muted tabular-nums">
+                    {r.requestedBy ?? "Admin"} · {when(r.createdAt)}
+                  </span>
+                </span>
+              </td>
+              <td data-label="Amount" className="cell-num font-medium">{formatMinor(r.amountMinor, r.currency)}</td>
+              <td data-label="Status" className="text-xs">
+                <span className="flex flex-col items-end gap-1 sm:items-start">
+                  <span className={refundStatusBadgeClass(r.status)}>{refundStatusLabel(r.status)}</span>
+                  {refundFailureLabel(r.failureCode) && <span className="text-muted">{refundFailureLabel(r.failureCode)}</span>}
+                </span>
+              </td>
+              <td data-label="Reason" className="text-xs">{refundReasonLabel(r.reason)}</td>
+              <td data-label="Checks" className="cell-num">
+                <span className="flex flex-col items-end gap-0.5">
+                  <span className="tabular-nums">{r.attempts}</span>
+                  {r.exhausted && <span className="badge badge-warning">Automatic checks stopped</span>}
+                </span>
+              </td>
+              <td className="cell-actions">
+                <Link href={`/admin/payments/${r.paymentId}#refunds`} className="btn btn-secondary btn-sm" aria-label={`View payment for refund ${shortRef(r.id)}`}>
+                  View payment
+                </Link>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

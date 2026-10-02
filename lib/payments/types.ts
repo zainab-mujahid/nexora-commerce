@@ -120,7 +120,67 @@ export type VerifiedProviderPayment = {
   providerStatusCode?: string;
   failureCode?: string;
   failureMessage?: string;
+  // The provider's own refund ledger for this payment (Payments P7), present
+  // only when the provider reports captured money AND lists its refunds
+  // authoritatively. Absent means "the provider told us nothing about
+  // refunds", never "no refunds".
+  refunds?: ProviderRefundSnapshot;
 };
+
+// ---- refunds (Payments P7) ----------------------------------------------------
+
+// Mirrors the payment_refunds.status CHECK in supabase/schema.sql.
+export const REFUND_STATUSES = ["requested", "requires_reconciliation", "succeeded", "voided", "failed"] as const;
+export type RefundStatus = (typeof REFUND_STATUSES)[number];
+// The refund's outcome is not known yet: no other refund of the same payment
+// may be sent to the provider meanwhile.
+export const OPEN_REFUND_STATUSES: readonly RefundStatus[] = ["requested", "requires_reconciliation"];
+
+export function isRefundStatus(value: unknown): value is RefundStatus {
+  return typeof value === "string" && (REFUND_STATUSES as readonly string[]).includes(value);
+}
+
+// Internal reason categories (payment_refunds.reason). Never sent to a provider.
+export const REFUND_REASONS = ["customer_request", "order_cancelled", "duplicate_payment", "inventory_issue", "other"] as const;
+export type RefundReason = (typeof REFUND_REASONS)[number];
+
+// One refund as the provider's AUTHORITATIVE lookup lists it.
+export type ProviderRefund = {
+  providerRefundId: string;
+  money: ProviderMoney;
+  // The provider later voided (cancelled) this refund.
+  voided: boolean;
+};
+
+export type ProviderRefundSnapshot = {
+  // Every refund the provider holds for the payment, voided ones included.
+  refunds: readonly ProviderRefund[];
+  // Captured amount and remaining refundable balance as the provider reports
+  // them; null when it reports none.
+  captured: ProviderMoney | null;
+  remaining: ProviderMoney | null;
+};
+
+export type CreateProviderRefundInput = {
+  providerPaymentId: string;
+  // payments.id (the reference the payment was created with).
+  reference: PaymentReference;
+  // Nexora's refund id (payment_refunds.id), for logs/correlation only.
+  refundId: string;
+  // Authoritative amount from the refund ledger, never from a browser.
+  money: Money;
+};
+
+// What the provider ANSWERED to a refund request — never a confirmation (an
+// authoritative lookup confirms). A request whose outcome is unknown
+// (timeout, network error, unusable answer) is not represented here: the
+// adapter throws PaymentError('provider_unavailable' |
+// 'provider_malformed_response') and the refund is treated as uncertain.
+export type ProviderRefundAttempt =
+  // The provider created a refund with this id and amount.
+  | { outcome: "accepted"; providerRefundId: string; money: ProviderMoney }
+  // The provider definitively refused the request (validation/state/decline).
+  | { outcome: "rejected"; code: string };
 
 export type CreateProviderCheckoutInput = {
   reference: PaymentReference;

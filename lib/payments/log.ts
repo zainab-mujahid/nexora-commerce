@@ -21,6 +21,7 @@ export type PaymentLogFields = {
   reused?: boolean;
   attempts?: number;
   summary?: string;
+  refundId?: string;
 };
 
 export function logPaymentEvent(level: "info" | "warn" | "error", event: string, fields: PaymentLogFields = {}): void {

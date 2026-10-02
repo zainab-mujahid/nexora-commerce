@@ -7,7 +7,8 @@ import { requireUser } from "@/lib/auth/dal";
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { formatPrice } from "@/lib/catalog/format";
 import { TestModeBadge } from "@/app/_components/test-mode-badge";
-import { getOrderById, getOrderPaymentMethod } from "@/lib/orders/queries";
+import { getOrderById, getOrderPaymentMethod, getOrderRefundSummary } from "@/lib/orders/queries";
+import { minorToUsdDecimal } from "@/lib/payments/money";
 import { getPaymentAvailability } from "@/lib/payments/presentation";
 
 import { PlacedBanner } from "./placed-banner";
@@ -27,6 +28,13 @@ export default async function OrderDetailPage({
 
   const address = order.shipping_address;
   const paymentMethod = order.payment_status === "not_collected" ? null : await getOrderPaymentMethod(order.id);
+  // Verified amounts only (refunds the provider confirmed); never timings.
+  const refunds =
+    order.payment_status === "partially_refunded" || order.payment_status === "refunded" ? await getOrderRefundSummary(order.id) : null;
+  const refundedText =
+    refunds && BigInt(refunds.refundedMinor) > BigInt(0)
+      ? `${formatPrice(minorToUsdDecimal(BigInt(refunds.refundedMinor)))} of ${formatPrice(minorToUsdDecimal(BigInt(refunds.paidMinor)))} refunded`
+      : null;
   const availability = getPaymentAvailability();
   const testMode = order.payment_status !== "not_collected" && availability.available && availability.testMode;
   const paymentLabel: Record<typeof order.payment_status, string> = {
@@ -128,6 +136,7 @@ export default async function OrderDetailPage({
                   </span>
                   {testMode && <TestModeBadge />}
                 </dd>
+                {refundedText && <dd className="text-sm tabular-nums">{refundedText}</dd>}
                 {paymentNote[order.payment_status] && (
                   <dd className="text-xs leading-relaxed text-muted">{paymentNote[order.payment_status]}</dd>
                 )}

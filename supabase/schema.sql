@@ -2864,3 +2864,825 @@ $$;
 
 revoke all on function public.claim_payment_event_for_retry(uuid) from public, anon, authenticated, service_role;
 grant execute on function public.claim_payment_event_for_retry(uuid) to service_role;
+
+-- ============================================================================
+-- Payments P7 — merchant refunds, refund ledger, privilege hardening
+--
+-- Refund contract this section is built on (verified against the Safepay
+-- sandbox, see lib/payments/providers/safepay): a refund is one synchronous
+-- provider call for an exact amount in minor units; partial refunds are
+-- allowed and repeatable up to the captured amount; each successful refund
+-- has its own provider id; the authoritative lookup lists every refund (with
+-- a voided flag) and the remaining balance. There is NO provider idempotency
+-- key, and the provider does NOT serialize concurrent refunds (two parallel
+-- requests both succeeded past the remaining balance in the sandbox) — so
+-- Nexora itself guarantees "one money-moving refund request per payment at a
+-- time" and never repeats a request whose outcome is unknown.
+--
+--   admin_begin_payment_refund()  admin session: durable refund intent
+--                                 ('requested'), all amount/eligibility checks,
+--                                 idempotent on the form's key
+--   record_refund_attempt()       server: what the provider ANSWERED (accepted
+--                                 + its refund id / rejected / no answer) —
+--                                 never a final state on its own
+--   reconcile_payment_refunds()   server: the ONE place that confirms refunds,
+--                                 from an AUTHORITATIVE provider lookup, and
+--                                 derives the payment/order refund status from
+--                                 the ledger
+--   claim_open_refunds()          server: scheduled recovery of refunds whose
+--                                 outcome is still open
+--   get_own_order_refund_summary() customer: verified refunded total of their
+--                                 own order, nothing else
+--
+-- Refund states:
+--   requested               intent recorded; the provider may or may not have
+--                           received the request yet
+--   requires_reconciliation the request may have reached the provider but its
+--                           outcome is unknown (timeout, lost response, crash)
+--   succeeded               confirmed by an authoritative lookup (terminal,
+--                           except that the provider can later void it)
+--   voided                  a confirmed refund the provider reports as voided
+--   failed                  the provider refused it, or an authoritative lookup
+--                           long after the request shows no such refund
+-- A succeeded refund never becomes failed. Refund history is never edited or
+-- deleted (trigger below), and refunds never touch fulfilment status or stock.
+-- ============================================================================
+
+-- ---- payments: identity target for refunds ---------------------------------
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.payments'::regclass and conname = 'payments_refund_identity_key') then
+    alter table public.payments
+      add constraint payments_refund_identity_key unique (id, provider, currency);
+  end if;
+end;
+$$;
+
+-- ---- payment_refunds ---------------------------------------------------------
+-- One row per refund: Nexora-initiated (origin 'nexora', with the admin's
+-- intent) or found at the provider without a Nexora request (origin
+-- 'provider', e.g. issued from the provider's dashboard — recorded from the
+-- authoritative lookup so totals are never understated). The composite
+-- foreign key keeps provider and currency equal to the payment's.
+create table if not exists public.payment_refunds (
+  id                 uuid primary key default gen_random_uuid(),
+  payment_id         uuid not null,
+  order_id           uuid references public.orders (id),
+  provider           text not null check (provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+  provider_refund_id text check (provider_refund_id ~ '^[\x21-\x7e]{1,255}$'),
+  amount_minor       bigint not null check (amount_minor > 0),
+  currency           text not null check (currency = 'USD'),
+  status             text not null default 'requested'
+                       check (status in ('requested', 'requires_reconciliation', 'succeeded', 'voided', 'failed')),
+  origin             text not null default 'nexora' check (origin in ('nexora', 'provider')),
+  reason             text check (reason in ('customer_request', 'order_cancelled', 'duplicate_payment',
+                                            'inventory_issue', 'other')),
+  note               text check (char_length(note) between 1 and 500),
+  requested_by       uuid references auth.users (id) on delete set null,
+  idempotency_key    uuid,
+  -- What the provider answered to the request (not a confirmation).
+  provider_accepted  boolean not null default false,
+  provider_rejected  boolean not null default false,
+  failure_code       text check (char_length(failure_code) <= 64),
+  submitted_at       timestamptz,
+  completed_at       timestamptz,
+  last_checked_at    timestamptz,
+  reconcile_after    timestamptz,
+  reconcile_attempts integer not null default 0,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  constraint payment_refunds_payment_identity_fkey
+    foreign key (payment_id, provider, currency)
+    references public.payments (id, provider, currency)
+    on delete restrict,
+  constraint payment_refunds_provider_refund_id_key unique (provider, provider_refund_id),
+  constraint payment_refunds_idempotency_key_key unique (idempotency_key),
+  -- Confirmed refunds always carry the provider's refund id and a time.
+  constraint payment_refunds_confirmed_has_provider_id
+    check (status not in ('succeeded', 'voided') or (provider_refund_id is not null and completed_at is not null)),
+  -- Nexora refunds carry the admin's intent; provider-found ones are only
+  -- ever recorded already confirmed.
+  constraint payment_refunds_origin_shape
+    check ((origin = 'nexora' and idempotency_key is not null and reason is not null and submitted_at is not null)
+        or (origin = 'provider' and idempotency_key is null and reason is null and note is null
+            and requested_by is null and status in ('succeeded', 'voided')))
+);
+
+-- At most one refund per payment whose outcome is still open: the guard
+-- against double refunds (double clicks, two tabs, retries) given that the
+-- provider neither deduplicates nor serializes refund requests.
+create unique index if not exists payment_refunds_one_open_per_payment_idx
+  on public.payment_refunds (payment_id)
+  where status in ('requested', 'requires_reconciliation');
+
+create index if not exists payment_refunds_payment_idx on public.payment_refunds (payment_id, created_at);
+create index if not exists payment_refunds_order_idx on public.payment_refunds (order_id) where order_id is not null;
+create index if not exists payment_refunds_open_idx
+  on public.payment_refunds (reconcile_after)
+  where status in ('requested', 'requires_reconciliation');
+
+-- Refund history is append-only: identity, amount and intent never change,
+-- terminal states stay terminal, a confirmed refund can only become voided,
+-- and rows are never deleted. Applies to every role, including the
+-- SECURITY DEFINER functions below.
+create or replace function public.payment_refunds_guard()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'REFUND_HISTORY_IMMUTABLE';
+  end if;
+  if new.id <> old.id or new.payment_id <> old.payment_id or new.provider <> old.provider
+     or new.amount_minor <> old.amount_minor or new.currency <> old.currency or new.origin <> old.origin
+     or new.order_id is distinct from old.order_id
+     or new.reason is distinct from old.reason or new.note is distinct from old.note
+     or new.requested_by is distinct from old.requested_by
+     or new.idempotency_key is distinct from old.idempotency_key
+     or new.submitted_at is distinct from old.submitted_at or new.created_at <> old.created_at
+     or (old.provider_refund_id is not null and new.provider_refund_id is distinct from old.provider_refund_id)
+     or (old.completed_at is not null and new.completed_at is distinct from old.completed_at) then
+    raise exception 'REFUND_HISTORY_IMMUTABLE';
+  end if;
+  if new.status <> old.status and not (
+       (old.status = 'requested' and new.status in ('requires_reconciliation', 'succeeded', 'voided', 'failed'))
+    or (old.status = 'requires_reconciliation' and new.status in ('succeeded', 'voided', 'failed'))
+    or (old.status = 'succeeded' and new.status = 'voided')) then
+    raise exception 'ILLEGAL_REFUND_TRANSITION:%->%', old.status, new.status;
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+revoke all on function public.payment_refunds_guard() from public, anon, authenticated, service_role;
+
+drop trigger if exists payment_refunds_guard on public.payment_refunds;
+create trigger payment_refunds_guard
+  before update or delete on public.payment_refunds
+  for each row execute function public.payment_refunds_guard();
+
+alter table public.payment_refunds enable row level security;
+
+-- Internal operations data (admin identity, notes, provider ids): admin only.
+-- Customers see refunds only as a verified total of their own order, through
+-- get_own_order_refund_summary().
+drop policy if exists "payment_refunds_select_admin" on public.payment_refunds;
+create policy "payment_refunds_select_admin" on public.payment_refunds
+  for select using (public.is_admin());
+
+revoke all on table public.payment_refunds from public, anon, authenticated, service_role;
+grant select on public.payment_refunds to authenticated, service_role;
+
+-- ---- admin_begin_payment_refund() -------------------------------------------
+-- Called with the ADMIN's own session: is_admin() is the authorization gate
+-- and stays the first statement; requested_by is auth.uid(), never a
+-- parameter. Records the refund intent BEFORE any money moves and returns
+-- what the server needs to call the provider. Nothing here trusts the
+-- browser beyond intent: the payment's amount, currency, status and provider
+-- reference come from the database.
+--
+-- Idempotent on p_idempotency_key (one per rendered refund form): the same
+-- key returns the same refund (reused = true) and only the original caller
+-- ever sends it to the provider. p_expected_refunded_minor is the refunded
+-- total the admin was looking at; if the ledger moved since (another tab,
+-- a provider-side refund), the request is refused instead of stacking.
+--
+-- Raises: ADMIN_REQUIRED, INVALID_REFUND_AMOUNT, INVALID_REFUND_REASON,
+-- INVALID_NOTE, IDEMPOTENCY_KEY_REQUIRED, PAYMENT_NOT_FOUND,
+-- IDEMPOTENCY_KEY_REUSED, REFUND_NOT_ALLOWED:<status>, REFUND_CURRENCY_MISMATCH,
+-- REFUND_IN_PROGRESS, REFUND_STATE_CHANGED, REFUND_EXCEEDS_REMAINING.
+create or replace function public.admin_begin_payment_refund(
+  p_payment_id              uuid,
+  p_amount_minor            bigint,
+  p_currency                text,
+  p_reason                  text,
+  p_note                    text,
+  p_idempotency_key         uuid,
+  p_expected_refunded_minor bigint
+)
+returns table (
+  refund_id           uuid,
+  refund_status       text,
+  reused              boolean,
+  provider            text,
+  provider_payment_id text,
+  amount_minor        bigint,
+  currency            text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_user_id  uuid;
+  v_payment  public.payments%rowtype;
+  v_existing public.payment_refunds%rowtype;
+  v_note     text;
+  v_refunded bigint;
+  v_id       uuid;
+begin
+  if not public.is_admin() then
+    raise exception 'ADMIN_REQUIRED';
+  end if;
+  if p_amount_minor is null or p_amount_minor <= 0 then
+    raise exception 'INVALID_REFUND_AMOUNT';
+  end if;
+  if p_reason is null or p_reason not in ('customer_request', 'order_cancelled', 'duplicate_payment',
+                                          'inventory_issue', 'other') then
+    raise exception 'INVALID_REFUND_REASON';
+  end if;
+  v_note := nullif(btrim(coalesce(p_note, '')), '');
+  if v_note is not null and (char_length(v_note) > 500 or v_note ~ E'[\\x01-\\x09\\x0b-\\x1f\\x7f]') then
+    raise exception 'INVALID_NOTE';
+  end if;
+  if p_idempotency_key is null then
+    raise exception 'IDEMPOTENCY_KEY_REQUIRED';
+  end if;
+
+  select p.user_id into v_user_id from public.payments p where p.id = p_payment_id;
+  if v_user_id is null then
+    raise exception 'PAYMENT_NOT_FOUND';
+  end if;
+
+  -- Same lock order as every payment function: customer lock, then rows.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+  select p.* into v_payment from public.payments p where p.id = p_payment_id for update;
+
+  select r.* into v_existing from public.payment_refunds r where r.idempotency_key = p_idempotency_key;
+  if found then
+    if v_existing.payment_id <> p_payment_id or v_existing.amount_minor <> p_amount_minor then
+      raise exception 'IDEMPOTENCY_KEY_REUSED';
+    end if;
+    return query select v_existing.id, v_existing.status, true, v_payment.provider,
+                        v_payment.provider_payment_id, v_existing.amount_minor, v_existing.currency;
+    return;
+  end if;
+
+  -- Only money that was verifiably received can be returned: a settled
+  -- payment, or a verified duplicate charge held for review. Payments under
+  -- any other review (dispute, reversal, mismatch...) are not refundable here.
+  if v_payment.provider_payment_id is null or v_payment.paid_at is null
+     or not (v_payment.status in ('paid', 'partially_refunded')
+             or (v_payment.status = 'requires_review' and v_payment.failure_code = 'DUPLICATE_PAYMENT'))
+     or v_payment.provider_state in ('reversed', 'voided', 'disputed') then
+    raise exception 'REFUND_NOT_ALLOWED:%', v_payment.status;
+  end if;
+  if p_currency is null or p_currency <> v_payment.currency then
+    raise exception 'REFUND_CURRENCY_MISMATCH';
+  end if;
+
+  perform 1 from public.payment_refunds r
+  where r.payment_id = v_payment.id for update;
+  if exists (select 1 from public.payment_refunds r
+             where r.payment_id = v_payment.id and r.status in ('requested', 'requires_reconciliation')) then
+    raise exception 'REFUND_IN_PROGRESS';
+  end if;
+
+  select coalesce(sum(r.amount_minor), 0) into v_refunded
+  from public.payment_refunds r
+  where r.payment_id = v_payment.id and r.status = 'succeeded';
+
+  if p_expected_refunded_minor is null or p_expected_refunded_minor <> v_refunded then
+    raise exception 'REFUND_STATE_CHANGED';
+  end if;
+  if v_refunded >= v_payment.amount_minor then
+    raise exception 'REFUND_NOT_ALLOWED:refunded';
+  end if;
+  if p_amount_minor > v_payment.amount_minor - v_refunded then
+    raise exception 'REFUND_EXCEEDS_REMAINING';
+  end if;
+
+  insert into public.payment_refunds
+    (payment_id, order_id, provider, amount_minor, currency, status, origin, reason, note, requested_by,
+     idempotency_key, submitted_at, reconcile_after)
+  values
+    (v_payment.id, v_payment.order_id, v_payment.provider, p_amount_minor, v_payment.currency, 'requested',
+     'nexora', p_reason, v_note, auth.uid(), p_idempotency_key, now(), now() + interval '2 minutes')
+  returning id into v_id;
+
+  return query select v_id, 'requested'::text, false, v_payment.provider, v_payment.provider_payment_id,
+                      p_amount_minor, v_payment.currency;
+end;
+$$;
+
+revoke all on function public.admin_begin_payment_refund(uuid, bigint, text, text, text, uuid, bigint) from public, anon, authenticated, service_role;
+grant execute on function public.admin_begin_payment_refund(uuid, bigint, text, text, text, uuid, bigint) to authenticated;
+
+-- ---- record_refund_attempt() --------------------------------------------------
+-- Records what the provider answered to the refund request. Never confirms
+-- or fails a refund by itself — confirmation needs an authoritative lookup
+-- (reconcile_payment_refunds):
+--   accepted  : binds the provider's refund id (status stays open)
+--   rejected  : the provider refused; becomes 'failed' only once a lookup
+--               shows no matching refund
+--   uncertain : no usable answer -> requires_reconciliation; never retried
+-- Late/duplicate calls on a refund that is no longer open change nothing.
+-- Raises: REFUND_NOT_FOUND, INVALID_ARGUMENT, PROVIDER_REFUND_ID_IN_USE.
+create or replace function public.record_refund_attempt(
+  p_refund_id          uuid,
+  p_result             text,
+  p_provider_refund_id text default null,
+  p_amount_minor       bigint default null,
+  p_currency           text default null,
+  p_code               text default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_refund  public.payment_refunds%rowtype;
+begin
+  if p_result is null or p_result not in ('accepted', 'rejected', 'uncertain')
+     or (p_code is not null and (char_length(p_code) > 64 or p_code !~ '^[A-Za-z0-9_.:-]+$')) then
+    raise exception 'INVALID_ARGUMENT';
+  end if;
+  if p_result = 'accepted' and (p_provider_refund_id is null or p_provider_refund_id !~ '^[\x21-\x7e]{1,255}$'
+                                or p_amount_minor is null or p_currency is null) then
+    raise exception 'INVALID_ARGUMENT';
+  end if;
+
+  select p.user_id into v_user_id
+  from public.payment_refunds r join public.payments p on p.id = r.payment_id
+  where r.id = p_refund_id;
+  if v_user_id is null then
+    raise exception 'REFUND_NOT_FOUND';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+  select r.* into v_refund from public.payment_refunds r where r.id = p_refund_id for update;
+
+  if v_refund.status not in ('requested', 'requires_reconciliation') then
+    return v_refund.status;
+  end if;
+
+  if p_result = 'accepted' then
+    if v_refund.provider_refund_id is not null and v_refund.provider_refund_id <> p_provider_refund_id then
+      raise exception 'PROVIDER_REFUND_ID_IN_USE';
+    end if;
+    if exists (select 1 from public.payment_refunds o
+               where o.provider = v_refund.provider and o.provider_refund_id = p_provider_refund_id
+                 and o.id <> v_refund.id) then
+      raise exception 'PROVIDER_REFUND_ID_IN_USE';
+    end if;
+    update public.payment_refunds
+    set provider_refund_id = p_provider_refund_id,
+        provider_accepted  = true,
+        -- The provider answered for a different amount than requested: the
+        -- lookup decides, but this can never be confirmed silently.
+        status       = case when p_amount_minor <> amount_minor or p_currency <> currency
+                            then 'requires_reconciliation' else status end,
+        failure_code = case when p_amount_minor <> amount_minor or p_currency <> currency
+                            then 'REFUND_AMOUNT_MISMATCH' else failure_code end
+    where id = v_refund.id;
+  elsif p_result = 'rejected' then
+    update public.payment_refunds
+    set provider_rejected = true,
+        failure_code      = coalesce(p_code, 'PROVIDER_REJECTED')
+    where id = v_refund.id;
+  else
+    update public.payment_refunds
+    set status          = 'requires_reconciliation',
+        failure_code    = coalesce(p_code, 'PROVIDER_NO_ANSWER'),
+        reconcile_after = now() + interval '1 minute'
+    where id = v_refund.id;
+  end if;
+
+  return (select r.status from public.payment_refunds r where r.id = v_refund.id);
+end;
+$$;
+
+revoke all on function public.record_refund_attempt(uuid, text, text, bigint, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.record_refund_attempt(uuid, text, text, bigint, text, text) to service_role;
+
+-- ---- reconcile_payment_refunds() ---------------------------------------------
+-- Applies ONE authoritative provider lookup of a payment's refunds to the
+-- ledger, atomically (customer lock + payment + refund rows locked), and
+-- derives the payment's refund status from the ledger:
+--
+--   p_refunds  the provider's complete refund list for the payment:
+--              [{"id": text, "amount_minor": int, "currency": text,
+--                "voided": bool}, ...]
+--   p_provider_status  the provider's generic status for the payment
+--   p_captured_minor / p_remaining_minor  captured amount and remaining
+--              refundable balance as the provider reports them (null when
+--              the provider has none)
+--
+-- Matching, in order:
+--   1. ledger refunds with a provider id: listed -> succeeded (or voided if
+--      the provider voided it); a confirmed refund missing from the list or
+--      a disagreeing amount is a contradiction (review, never downgraded);
+--   2. the (single) open refund without a provider id — its response was
+--      lost: exactly one unmatched provider refund of the same amount and
+--      currency -> it is that refund; several -> ambiguous (review, nothing
+--      guessed); none -> failed if the provider rejected it, or if the
+--      request is over 10 minutes old (a synchronous refund that would
+--      exist by now), otherwise still open;
+--   3. remaining unmatched provider refunds are recorded as origin
+--      'provider' (real money movements Nexora did not request).
+-- Then the ledger total must agree with the provider: total <= paid amount,
+-- paid - total = provider balance, and the provider's status must match
+-- (no refunds -> paid, some -> partially_refunded, all -> refunded).
+-- Any disagreement moves the payment to requires_review with the reason; a
+-- payment already under review keeps its original reason. Otherwise the
+-- payment (and its order's payment_status) follows the ledger. A payment
+-- under review whose money is verifiably this checkout's settled payment
+-- moves to its refund status (same rule as record_payment_status); a
+-- duplicate charge stays under review. Fulfilment and stock are never touched.
+--
+-- Returns the payment's status afterwards, the issue code (or null) and how
+-- many ledger rows changed.
+-- Raises: PAYMENT_NOT_FOUND, INVALID_ARGUMENT, PAYMENT_NOT_SETTLED.
+create or replace function public.reconcile_payment_refunds(
+  p_payment_id      uuid,
+  p_provider_status text,
+  p_captured_minor  bigint,
+  p_remaining_minor bigint,
+  p_refunds         jsonb
+)
+returns table (payment_status text, issue text, changed integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_user_id   uuid;
+  v_payment   public.payments%rowtype;
+  v_row       public.payment_refunds%rowtype;
+  v_item      jsonb;
+  v_items     jsonb := '[]'::jsonb;
+  v_claimed   text[] := array[]::text[];
+  v_cands     jsonb;
+  v_issue     text;
+  v_ambiguous boolean := false;
+  v_changed   integer := 0;
+  v_total     bigint;
+  v_expected  text;
+  v_new       text;
+  v_grace     interval := interval '10 minutes';
+  v_settled_other boolean;
+begin
+  if p_provider_status is null or p_provider_status not in ('pending', 'processing', 'paid', 'failed', 'cancelled',
+       'expired', 'refunded', 'partially_refunded', 'requires_review')
+     or p_refunds is null or jsonb_typeof(p_refunds) <> 'array' or jsonb_array_length(p_refunds) > 500
+     or (p_captured_minor is not null and p_captured_minor < 0) then
+    raise exception 'INVALID_ARGUMENT';
+  end if;
+  -- p_remaining_minor may be NEGATIVE: an over-refund at the provider (seen in
+  -- the Safepay sandbox under a refund race) is evidence, not bad input — it
+  -- fails the balance check below and sends the payment to review.
+
+  -- Strict shape: exactly these keys, sane values, no duplicate ids.
+  for v_item in select e from jsonb_array_elements(p_refunds) e loop
+    if jsonb_typeof(v_item) <> 'object'
+       or (select count(*) from jsonb_object_keys(v_item)) <> 4
+       or not (v_item ? 'id' and v_item ? 'amount_minor' and v_item ? 'currency' and v_item ? 'voided')
+       or jsonb_typeof(v_item -> 'id') <> 'string' or (v_item ->> 'id') !~ '^[\x21-\x7e]{1,255}$'
+       or jsonb_typeof(v_item -> 'amount_minor') <> 'number' or (v_item ->> 'amount_minor') !~ '^[1-9][0-9]{0,17}$'
+       or jsonb_typeof(v_item -> 'currency') <> 'string' or (v_item ->> 'currency') !~ '^[A-Z]{3}$'
+       or jsonb_typeof(v_item -> 'voided') <> 'boolean' then
+      raise exception 'INVALID_ARGUMENT';
+    end if;
+  end loop;
+  if (select count(distinct e ->> 'id') from jsonb_array_elements(p_refunds) e) <> jsonb_array_length(p_refunds) then
+    raise exception 'INVALID_ARGUMENT';
+  end if;
+
+  select p.user_id into v_user_id from public.payments p where p.id = p_payment_id;
+  if v_user_id is null then
+    raise exception 'PAYMENT_NOT_FOUND';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('nexora.checkout:' || v_user_id::text, 0));
+  select p.* into v_payment from public.payments p where p.id = p_payment_id for update;
+  perform 1 from public.payment_refunds r where r.payment_id = v_payment.id order by r.id for update;
+
+  -- Refunds can only be reconciled for money that was received.
+  if v_payment.paid_at is null
+     or v_payment.status not in ('paid', 'partially_refunded', 'refunded', 'requires_review') then
+    raise exception 'PAYMENT_NOT_SETTLED';
+  end if;
+
+  -- 1. Ledger refunds that carry a provider id.
+  for v_row in
+    select r.* from public.payment_refunds r
+    where r.payment_id = v_payment.id and r.provider_refund_id is not null
+    order by r.created_at, r.id
+  loop
+    v_claimed := v_claimed || v_row.provider_refund_id;
+    select e into v_item from jsonb_array_elements(p_refunds) e where e ->> 'id' = v_row.provider_refund_id;
+
+    if v_item is null then
+      if v_row.status = 'succeeded' then
+        v_issue := coalesce(v_issue, 'REFUND_MISSING_AT_PROVIDER');
+      elsif v_row.status in ('requested', 'requires_reconciliation') and v_row.submitted_at < now() - v_grace then
+        -- Accepted by the provider long ago but not in its own ledger.
+        if v_row.status = 'requested' then
+          update public.payment_refunds set status = 'requires_reconciliation', failure_code = 'REFUND_MISSING_AT_PROVIDER'
+          where id = v_row.id;
+          v_changed := v_changed + 1;
+        end if;
+        v_issue := coalesce(v_issue, 'REFUND_MISSING_AT_PROVIDER');
+      end if;
+    elsif (v_item ->> 'amount_minor')::bigint <> v_row.amount_minor or (v_item ->> 'currency') <> v_row.currency then
+      if v_row.status = 'requested' then
+        update public.payment_refunds set status = 'requires_reconciliation', failure_code = 'REFUND_AMOUNT_MISMATCH'
+        where id = v_row.id;
+        v_changed := v_changed + 1;
+      end if;
+      v_issue := coalesce(v_issue, 'REFUND_AMOUNT_MISMATCH');
+    elsif (v_item ->> 'voided')::boolean then
+      -- Newly voided at the provider: money that was returned is back with
+      -- the merchant. Review it once; a known void is not a new finding.
+      if v_row.status <> 'voided' then
+        update public.payment_refunds
+        set status = 'voided', completed_at = coalesce(completed_at, now()), last_checked_at = now()
+        where id = v_row.id;
+        v_changed := v_changed + 1;
+        v_issue := coalesce(v_issue, 'PROVIDER_REFUND_VOIDED');
+      end if;
+    elsif v_row.status in ('requested', 'requires_reconciliation') then
+      update public.payment_refunds
+      set status = 'succeeded', completed_at = now(), failure_code = null, last_checked_at = now()
+      where id = v_row.id;
+      v_changed := v_changed + 1;
+    else
+      update public.payment_refunds set last_checked_at = now() where id = v_row.id;
+    end if;
+  end loop;
+
+  -- Provider refunds not yet tied to a ledger row.
+  select coalesce(jsonb_agg(e), '[]'::jsonb) into v_items
+  from jsonb_array_elements(p_refunds) e
+  where not ((e ->> 'id') = any (v_claimed));
+
+  -- 2. The open refund whose provider answer was lost (at most one exists).
+  for v_row in
+    select r.* from public.payment_refunds r
+    where r.payment_id = v_payment.id and r.provider_refund_id is null
+      and r.status in ('requested', 'requires_reconciliation')
+    order by r.created_at, r.id
+  loop
+    select coalesce(jsonb_agg(e), '[]'::jsonb) into v_cands
+    from jsonb_array_elements(v_items) e
+    where not (e ->> 'voided')::boolean
+      and (e ->> 'amount_minor')::bigint = v_row.amount_minor
+      and (e ->> 'currency') = v_row.currency;
+
+    if jsonb_array_length(v_cands) = 1 then
+      update public.payment_refunds
+      set provider_refund_id = v_cands -> 0 ->> 'id', status = 'succeeded', completed_at = now(),
+          failure_code = null, last_checked_at = now()
+      where id = v_row.id;
+      v_changed := v_changed + 1;
+      select coalesce(jsonb_agg(e), '[]'::jsonb) into v_items
+      from jsonb_array_elements(v_items) e where (e ->> 'id') <> (v_cands -> 0 ->> 'id');
+    elsif jsonb_array_length(v_cands) > 1 then
+      v_ambiguous := true;
+      v_issue := coalesce(v_issue, 'REFUND_MATCH_AMBIGUOUS');
+      if v_row.status = 'requested' then
+        update public.payment_refunds set status = 'requires_reconciliation', failure_code = 'REFUND_MATCH_AMBIGUOUS'
+        where id = v_row.id;
+        v_changed := v_changed + 1;
+      end if;
+    elsif v_row.provider_rejected then
+      update public.payment_refunds set status = 'failed', completed_at = now(), last_checked_at = now()
+      where id = v_row.id;
+      v_changed := v_changed + 1;
+    elsif v_row.submitted_at < now() - v_grace then
+      update public.payment_refunds
+      set status = 'failed', completed_at = now(), failure_code = 'NOT_FOUND_AT_PROVIDER', last_checked_at = now()
+      where id = v_row.id;
+      v_changed := v_changed + 1;
+    else
+      update public.payment_refunds set last_checked_at = now() where id = v_row.id;
+    end if;
+  end loop;
+
+  -- 3. Refunds that exist only at the provider. Not while a lost answer is
+  -- ambiguous: one of them may be Nexora's own request.
+  if not v_ambiguous then
+    for v_item in select e from jsonb_array_elements(v_items) e loop
+      if (v_item ->> 'currency') <> v_payment.currency then
+        v_issue := coalesce(v_issue, 'REFUND_CURRENCY_MISMATCH');
+        continue;
+      end if;
+      insert into public.payment_refunds
+        (payment_id, order_id, provider, provider_refund_id, amount_minor, currency, status, origin,
+         completed_at, last_checked_at)
+      values
+        (v_payment.id, v_payment.order_id, v_payment.provider, v_item ->> 'id', (v_item ->> 'amount_minor')::bigint,
+         v_payment.currency, case when (v_item ->> 'voided')::boolean then 'voided' else 'succeeded' end, 'provider',
+         now(), now());
+      v_changed := v_changed + 1;
+    end loop;
+  end if;
+
+  -- 4. Totals must agree with the provider.
+  select coalesce(sum(r.amount_minor), 0) into v_total
+  from public.payment_refunds r
+  where r.payment_id = v_payment.id and r.status = 'succeeded';
+
+  if v_total > v_payment.amount_minor then
+    v_issue := coalesce(v_issue, 'REFUND_TOTAL_EXCEEDS_PAYMENT');
+  end if;
+  if p_captured_minor is not null and p_captured_minor <> v_payment.amount_minor then
+    v_issue := coalesce(v_issue, 'REFUND_BALANCE_MISMATCH');
+  end if;
+  if p_provider_status in ('paid', 'partially_refunded', 'refunded') and not v_ambiguous then
+    if p_remaining_minor is not null and p_remaining_minor <> v_payment.amount_minor - v_total then
+      v_issue := coalesce(v_issue, 'REFUND_BALANCE_MISMATCH');
+    end if;
+    v_expected := case when v_total = 0 then 'paid'
+                       when v_total < v_payment.amount_minor then 'partially_refunded'
+                       else 'refunded' end;
+    if p_provider_status <> v_expected then
+      v_issue := coalesce(v_issue, 'REFUND_STATE_MISMATCH');
+    end if;
+  end if;
+
+  -- 5. The payment (and its order) follow the ledger.
+  if v_issue is not null then
+    if v_payment.status <> 'requires_review' then
+      update public.payments
+      set status = 'requires_review', failure_code = v_issue,
+          failure_message = 'The provider''s refund records do not match Nexora''s refund ledger.',
+          last_checked_at = now(), updated_at = now()
+      where id = v_payment.id;
+      if v_payment.order_id is not null then
+        update public.orders set payment_status = 'requires_review', updated_at = now()
+        where id = v_payment.order_id;
+      end if;
+      v_new := 'requires_review';
+    else
+      update public.payments set last_checked_at = now(), updated_at = now() where id = v_payment.id;
+      v_new := v_payment.status;
+    end if;
+  elsif p_provider_status in ('paid', 'partially_refunded', 'refunded') then
+    v_new := case when v_total = 0 then 'paid'
+                  when v_total < v_payment.amount_minor then 'partially_refunded'
+                  else 'refunded' end;
+    if v_payment.status = 'requires_review' then
+      -- Same rule as record_payment_status(): only the checkout's own settled
+      -- payment leaves review through a refund; a duplicate charge stays.
+      select exists (select 1 from public.payments o
+                     where o.checkout_session_id = v_payment.checkout_session_id and o.id <> v_payment.id
+                       and o.status in ('paid', 'partially_refunded', 'refunded'))
+        into v_settled_other;
+      if v_total = 0 or v_settled_other then
+        v_new := 'requires_review';
+      end if;
+    elsif v_payment.status = 'refunded' and v_new <> 'refunded'
+          or v_payment.status = 'partially_refunded' and v_new = 'paid' then
+      -- Cannot happen without a void (already an issue); never step back.
+      v_new := v_payment.status;
+    end if;
+
+    update public.payments
+    set status = v_new, last_checked_at = now(), updated_at = now()
+    where id = v_payment.id;
+    if v_new <> v_payment.status and v_payment.order_id is not null then
+      update public.orders set payment_status = v_new, updated_at = now()
+      where id = v_payment.order_id;
+    end if;
+  else
+    update public.payments set last_checked_at = now(), updated_at = now() where id = v_payment.id;
+    v_new := v_payment.status;
+  end if;
+
+  -- A payment held in review for a refund-ledger reason stays there: report
+  -- that reason, so a later "paid" lookup is not taken as a resolution of a
+  -- contradiction nobody looked at. (The admin acknowledges it with a review
+  -- note; the payment's status itself is not changed by hand.)
+  if v_issue is null and v_new = 'requires_review'
+     and (v_payment.failure_code like 'REFUND\_%' or v_payment.failure_code = 'PROVIDER_REFUND_VOIDED') then
+    v_issue := v_payment.failure_code;
+  end if;
+
+  return query select v_new, v_issue, v_changed;
+end;
+$$;
+
+revoke all on function public.reconcile_payment_refunds(uuid, text, bigint, bigint, jsonb) from public, anon, authenticated, service_role;
+grant execute on function public.reconcile_payment_refunds(uuid, text, bigint, bigint, jsonb) to service_role;
+
+-- ---- claim_open_refunds() ------------------------------------------------------
+-- Scheduled recovery: claims refunds whose outcome is still open and due for
+-- an authoritative re-check (bounded batch, skip-locked, leased with
+-- exponential backoff capped at an hour). The re-check itself is the normal
+-- payment verification, which ends in reconcile_payment_refunds().
+create or replace function public.claim_open_refunds(p_limit integer, p_max_attempts integer)
+returns table (refund_id uuid, payment_id uuid, provider text, reconcile_attempts integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+begin
+  if p_limit is null or p_limit < 1 or p_limit > 100 or p_max_attempts is null or p_max_attempts < 1 then
+    raise exception 'INVALID_LIMIT';
+  end if;
+  return query
+  with due as (
+    select r.id
+    from public.payment_refunds r
+    where r.status in ('requested', 'requires_reconciliation')
+      and coalesce(r.reconcile_after, r.submitted_at) <= now()
+      and r.reconcile_attempts < p_max_attempts
+    order by coalesce(r.reconcile_after, r.submitted_at), r.id
+    limit p_limit
+    for update of r skip locked
+  )
+  update public.payment_refunds r
+  set reconcile_attempts = r.reconcile_attempts + 1,
+      reconcile_after = now() + least(interval '1 minute' * power(2, r.reconcile_attempts), interval '1 hour')
+  from due
+  where r.id = due.id
+  returning r.id, r.payment_id, r.provider, r.reconcile_attempts;
+end;
+$$;
+
+revoke all on function public.claim_open_refunds(integer, integer) from public, anon, authenticated, service_role;
+grant execute on function public.claim_open_refunds(integer, integer) to service_role;
+
+-- ---- get_own_order_refund_summary() ------------------------------------------
+-- The signed-in customer's verified refunded total for one of their own
+-- orders (confirmed refunds of the order's own payment only). No refund ids,
+-- notes, admin identity or provider details. Returns no row for someone
+-- else's order.
+create or replace function public.get_own_order_refund_summary(p_order_id uuid)
+returns table (refunded_minor bigint, paid_minor bigint, currency text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(sum(r.amount_minor) filter (where r.status = 'succeeded'), 0)::bigint,
+         p.amount_minor,
+         p.currency
+  from public.orders o
+  join public.payments p on p.order_id = o.id
+  left join public.payment_refunds r on r.payment_id = p.id
+  where o.id = p_order_id
+    and o.user_id = auth.uid()
+    and p.paid_at is not null
+  group by p.id, p.amount_minor, p.currency
+  limit 1;
+$$;
+
+revoke all on function public.get_own_order_refund_summary(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.get_own_order_refund_summary(uuid) to authenticated;
+
+-- ---- Privilege hardening (payment area) ----------------------------------------
+-- Customers keep reading their own payments/checkouts (RLS unchanged), but only
+-- the columns the storefront needs. Internal operational columns — failure
+-- codes/messages, the provider's raw state, verification and reconciliation
+-- bookkeeping — are no longer directly readable by the customer role; the
+-- admin reads them through admin_payments (below). service_role (server) keeps
+-- full SELECT. RLS is not weakened anywhere.
+revoke select on table public.payments from authenticated;
+grant select (id, checkout_session_id, order_id, user_id, provider, provider_payment_id, amount_minor, currency,
+              status, display_summary, paid_at, created_at, updated_at)
+  on public.payments to authenticated;
+
+revoke select on table public.checkout_sessions from authenticated;
+grant select (id, user_id, status, currency, subtotal, total, amount_minor, shipping_address, order_id,
+              reserved_until, created_at, updated_at)
+  on public.checkout_sessions to authenticated;
+
+-- Admin-only window onto every payment column. Runs with the owner's rights
+-- (column grants and RLS bypassed), so the is_admin() filter in the view IS
+-- the access rule; security_barrier keeps caller-supplied filters from being
+-- evaluated before it.
+create or replace view public.admin_payments
+with (security_barrier = true)
+as
+  select p.id, p.checkout_session_id, p.order_id, p.user_id, p.provider, p.provider_payment_id, p.amount_minor,
+         p.currency, p.status, p.failure_code, p.failure_message, p.display_summary, p.last_checked_at, p.paid_at,
+         p.created_at, p.updated_at, p.provider_state, p.provider_state_at
+  from public.payments p
+  where public.is_admin();
+
+revoke all on table public.admin_payments from public, anon, authenticated, service_role;
+grant select on public.admin_payments to authenticated;
+
+-- Pre-existing order tables still carry Supabase's default TRUNCATE /
+-- REFERENCES / TRIGGER (and, on PostgreSQL 17, MAINTAIN) privileges for the
+-- API roles. Nothing uses them; remove them. Existing SELECT/UPDATE grants
+-- (above) are unchanged.
+revoke truncate, references, trigger on public.orders, public.order_items from anon, authenticated, service_role;
+do $$
+begin
+  if current_setting('server_version_num')::int >= 170000 then
+    execute 'revoke maintain on public.orders, public.order_items from anon, authenticated, service_role';
+  end if;
+end;
+$$;

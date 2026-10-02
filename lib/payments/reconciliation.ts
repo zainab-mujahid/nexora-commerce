@@ -14,6 +14,9 @@ import { getPaymentServiceForProvider, type PaymentService } from "./service";
 //     payment service's shared release decision (reconcileCheckoutForRelease),
 //     which asks the provider first and finalizes / keeps / releases.
 //
+//   reconcileOpenRefunds — refunds whose provider outcome is still open,
+//     settled from the provider's refund ledger by the same verification.
+//
 //   recoverPaymentEvents — authentic webhook events that were recorded but
 //     never processed (process died after acknowledging) or whose processing
 //     failed. Re-run through the service's processProviderEvent using only
@@ -41,6 +44,10 @@ export type CheckoutReconcileOutcome =
 
 export type EventRecoveryOutcome = "recovered_event" | "ignored_event" | "event_retry_scheduled" | "reconciliation_error";
 
+// Payments P7: refunds whose outcome is still open (lost provider answer,
+// crash between recording the intent and calling the provider, ...).
+export type RefundRecoveryOutcome = "refund_settled" | "refund_still_open" | "provider_unavailable" | "reconciliation_error";
+
 export type ReconciliationSummary<T extends string> = { scanned: number; outcomes: Partial<Record<T, number>> };
 
 export type ReconciliationDeps = {
@@ -58,6 +65,9 @@ export const RECONCILE_LIMITS = Object.freeze({
   eventMinAgeSeconds: 120,
   // Recovery attempts per event before it is left for manual inspection.
   eventMaxAttempts: 8,
+  // Re-checks per open refund (exponential backoff, capped at an hour)
+  // before it is left for the admin, where it stays visible.
+  refundMaxAttempts: 12,
 });
 
 function bump<T extends string>(summary: ReconciliationSummary<T>, outcome: T): void {
@@ -163,13 +173,38 @@ export function createReconciliationService(deps: ReconciliationDeps) {
     return recoverEvent(event);
   }
 
-  async function runReconciliation(options: { checkoutLimit?: number; eventLimit?: number } = {}) {
-    const events = await recoverPaymentEvents({ limit: options.eventLimit });
-    const checkouts = await reconcileExpiredCheckouts({ limit: options.checkoutLimit });
-    return { events, checkouts };
+  // Open refunds: the normal authoritative verification of the refund's
+  // payment, which settles the refund from the provider's refund ledger
+  // (reconcile_payment_refunds). Never sends a refund request.
+  async function reconcileOpenRefunds(options: { limit?: number } = {}): Promise<ReconciliationSummary<RefundRecoveryOutcome>> {
+    const claimed = await store.claimOpenRefunds(clampBatch(options.limit, 20), RECONCILE_LIMITS.refundMaxAttempts);
+    const summary: ReconciliationSummary<RefundRecoveryOutcome> = { scanned: claimed.length, outcomes: {} };
+    for (const { refundId, paymentId, provider, attempts } of claimed) {
+      let outcome: RefundRecoveryOutcome;
+      try {
+        await serviceFor(provider).verifyPayment({ paymentId });
+        const row = await store.getRefund(refundId);
+        outcome = row && (row.status === "requested" || row.status === "requires_reconciliation") ? "refund_still_open" : "refund_settled";
+      } catch (error) {
+        const code = isPaymentError(error) ? error.code : "unknown";
+        outcome = code === "provider_unavailable" || code === "provider_malformed_response" ? "provider_unavailable" : "reconciliation_error";
+        if (outcome === "reconciliation_error") logPaymentEvent("error", "reconciliation_error", { paymentId, provider, refundId, code });
+      }
+      bump(summary, outcome);
+      logPaymentEvent("info", "refund_reconciled", { paymentId, provider, refundId, outcome, attempts });
+    }
+    logPaymentEvent("info", "refund_reconciliation_run", { summary: JSON.stringify({ scanned: summary.scanned, ...summary.outcomes }) });
+    return summary;
   }
 
-  return { reconcileCheckout, reconcileExpiredCheckouts, recoverPaymentEvents, retryRecordedEvent, runReconciliation };
+  async function runReconciliation(options: { checkoutLimit?: number; eventLimit?: number; refundLimit?: number } = {}) {
+    const events = await recoverPaymentEvents({ limit: options.eventLimit });
+    const refunds = await reconcileOpenRefunds({ limit: options.refundLimit });
+    const checkouts = await reconcileExpiredCheckouts({ limit: options.checkoutLimit });
+    return { events, refunds, checkouts };
+  }
+
+  return { reconcileCheckout, reconcileExpiredCheckouts, recoverPaymentEvents, retryRecordedEvent, reconcileOpenRefunds, runReconciliation };
 }
 
 export type ReconciliationService = ReturnType<typeof createReconciliationService>;

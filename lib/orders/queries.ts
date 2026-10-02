@@ -183,6 +183,26 @@ export const getAdminOrderById = cache(
   },
 );
 
+// Verified refunded total of the customer's own order (Payments P7), from
+// get_own_order_refund_summary(): only refunds the provider confirmed — no
+// refund ids, notes, admin identity or provider details. Integer cents as
+// digit strings (exact). null when the order has no settled online payment.
+export type OrderRefundSummary = { refundedMinor: string; paidMinor: string; currency: string };
+
+export const getOrderRefundSummary = cache(async (orderId: string): Promise<OrderRefundSummary | null> => {
+  await requireUser();
+  if (!orderIdSchema.safeParse(orderId).success) return null;
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_own_order_refund_summary", { p_order_id: orderId });
+  if (error) {
+    console.error("getOrderRefundSummary: failed", error.code);
+    return null;
+  }
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row) return null;
+  return { refundedMinor: String(row.refunded_minor), paidMinor: String(row.paid_minor), currency: String(row.currency) };
+});
+
 // Safe display of how an order was paid (card brand + last four digits),
 // from the customer's own payment row (RLS payments_select_own_or_admin).
 // null for orders without an online payment.

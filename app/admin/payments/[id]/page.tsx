@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
@@ -22,6 +24,7 @@ import {
 import { getAdminPaymentDetail, type TimelineEntry } from "@/lib/admin/payment-queries";
 
 import { RecheckPaymentButton, RetryEventButton, ReviewForm } from "../payment-actions";
+import { RefundPanel } from "../refund-panel";
 
 export const metadata: Metadata = {
   title: "Payment details",
@@ -38,6 +41,8 @@ const SESSION_STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelled — reservation released",
   payment_conflict: "Payment conflict — no order",
 };
+
+const PROVIDER_LABEL: Record<string, string> = { safepay: "Safepay" };
 
 const TIMELINE_KIND: Record<TimelineEntry["kind"], { label: string; className: string }> = {
   verified: { label: "Verified with provider", className: "badge badge-success" },
@@ -145,13 +150,14 @@ export default async function AdminPaymentDetailPage({ params }: PageProps<"/adm
                 </Fact>
               )}
             </dl>
-            {payment.status === "partially_refunded" && (
-              <p className="rounded-md border border-border bg-fill/40 px-3 py-2 text-xs leading-relaxed text-muted">
-                The provider reports a partial refund but not a verifiable refunded amount, so no amount is shown. Check the
-                provider&apos;s dashboard for the exact figure.
-              </p>
-            )}
           </section>
+
+          <RefundPanel
+            paymentId={payment.id}
+            providerLabel={PROVIDER_LABEL[payment.provider] ?? payment.provider}
+            summary={detail.refunds}
+            idempotencyKey={randomUUID()}
+          />
 
           <section aria-labelledby="order-heading" className="card flex flex-col gap-3 p-5 text-sm sm:p-6">
             <h2 id="order-heading" className="text-base font-semibold">Order &amp; fulfilment</h2>
@@ -168,9 +174,15 @@ export default async function AdminPaymentDetailPage({ params }: PageProps<"/adm
                   <p className="text-xs font-medium">This order was created by another payment for the same checkout, not by this one.</p>
                 )}
                 <p className="text-xs leading-relaxed text-muted">
-                  Fulfilment status and stock are never changed by payment events. Refunds, reversals and disputes don&apos;t cancel the order or return
+                  Fulfilment status and stock are never changed by payments. Refunds, reversals and disputes don&apos;t cancel the order or return
                   items to stock — do that from the order, deliberately, if it&apos;s right.
                 </p>
+                {order.status === "cancelled" && BigInt(detail.refunds.remainingMinor) > BigInt(0) && order.fromThisPayment && (
+                  <p className="rounded-md border border-warning/40 bg-fill/40 px-3 py-2 text-xs leading-relaxed">
+                    This order is cancelled but {formatMinor(detail.refunds.remainingMinor, payment.currency)} of its payment hasn&apos;t been
+                    refunded. Cancelling never returns money — use the refund panel if the customer should get it back.
+                  </p>
+                )}
               </>
             ) : (
               <p className="text-muted">

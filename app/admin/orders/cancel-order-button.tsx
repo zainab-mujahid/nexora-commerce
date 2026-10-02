@@ -14,7 +14,7 @@ export function CancelOrderButton({
   orderId: string;
   status: string;
   // The order was paid online: cancelling (fulfilment + stock) does not
-  // return the money — refunds are a separate step at the provider.
+  // return the money — refunding is a separate step on the payment page.
   paidOnline?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(
@@ -34,7 +34,7 @@ export function CancelOrderButton({
       </button>
       {canCancel && paidOnline && (
         <p className="text-xs text-muted">
-          Cancelling restores stock but doesn&apos;t refund the payment — refunds are issued in the payment provider&apos;s dashboard.
+          Cancelling restores stock but doesn&apos;t refund the payment — refund it from the payment page afterwards if the customer should get it back.
         </p>
       )}
       {!canCancel && (
