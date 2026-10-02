@@ -24,6 +24,7 @@ import {
   SETTLED_PAYMENT_STATUSES,
   type PaymentDisplaySummary,
   type PaymentStatus,
+  type ProviderEventHint,
   type VerifiedProviderPayment,
 } from "./types";
 import { evaluateProviderPayment, type VerificationIssue } from "./verification";
@@ -67,6 +68,19 @@ export type VerificationResult =
   | { kind: "requires_review"; paymentId: string; reasons: readonly string[] }
   | { kind: "payment_conflict"; paymentId: string };
 
+// Outcome of a customer's request to stop a checkout.
+export type CancelCheckoutResult =
+  // The provider had in fact been paid: the order exists (or now does).
+  | { kind: "finalized"; orderId: string }
+  // Reservation returned; the cart was never touched.
+  | { kind: "released"; status: "cancelled" | "expired" }
+  // The provider is mid-authorization: releasing now could race a payment.
+  | { kind: "still_processing" }
+  // A payment needs manual review; the reservation is kept for it.
+  | { kind: "requires_review" }
+  // Already closed earlier (cancelled/expired/payment_conflict).
+  | { kind: "closed"; status: string };
+
 export type EventHandlingResult =
   | { kind: "rejected" }
   | { kind: "duplicate"; eventId: string }
@@ -75,6 +89,11 @@ export type EventHandlingResult =
   | { kind: "error"; eventId: string; code: string };
 
 export type PaymentService = ReturnType<typeof createPaymentService>;
+
+export type ReceivedProviderEvent =
+  | { kind: "rejected" }
+  | { kind: "duplicate"; eventId: string }
+  | { kind: "accepted"; eventId: string; eventType: string; hint: ProviderEventHint };
 
 // ---- input validation ---------------------------------------------------------
 // strictObject: unknown keys (an "amount", "price" or "currency" a browser
@@ -458,7 +477,14 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
   // Authenticity is checked by the adapter on the RAW body. An authentic event
   // is recorded once (duplicates are acknowledged and ignored) and then only
   // triggers verifyPayment() for the payment it names.
-  async function handleProviderEvent(input: { rawBody: string; headers: Headers }): Promise<EventHandlingResult> {
+  //
+  // Split in two so a webhook route can acknowledge the provider quickly
+  // (Safepay retries anything not answered within 10 s) and do the slower
+  // verification after responding — the event is durably recorded first:
+  //   receiveProviderEvent  — verify signature, record, dedupe   (fast)
+  //   processProviderEvent  — authoritative verification/finalize (slow)
+  // handleProviderEvent runs both, in order.
+  async function receiveProviderEvent(input: { rawBody: string; headers: Headers }): Promise<ReceivedProviderEvent> {
     let parsed;
     try {
       parsed = await provider.parseEvent(input);
@@ -494,7 +520,11 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
       logPaymentEvent("info", "provider_event_duplicate", { provider: provider.name, eventType });
       return { kind: "duplicate", eventId: recorded.eventId };
     }
+    return { kind: "accepted", eventId: recorded.eventId, eventType, hint };
+  }
 
+  async function processProviderEvent(event: { eventId: string; eventType: string; hint: ProviderEventHint }): Promise<EventHandlingResult> {
+    const { eventId, eventType, hint } = event;
     try {
       const ctx = hint.providerPaymentId
         ? await store.getPaymentContext({ provider: provider.name, providerPaymentId: hint.providerPaymentId })
@@ -503,29 +533,101 @@ export function createPaymentService(deps: { provider: PaymentProvider; store: P
           : null;
 
       if (!ctx) {
-        await store.markPaymentEventProcessed({ eventId: recorded.eventId, outcome: "ignored" });
+        await store.markPaymentEventProcessed({ eventId, outcome: "ignored" });
         logPaymentEvent("info", "provider_event_ignored", { provider: provider.name, eventType });
-        return { kind: "ignored", eventId: recorded.eventId };
+        return { kind: "ignored", eventId };
       }
 
       const verification = await verifyPayment({ paymentId: ctx.paymentId });
       await store.markPaymentEventProcessed({
-        eventId: recorded.eventId,
+        eventId,
         outcome: verification.kind === "requires_review" ? "verification_failed" : "processed",
         paymentId: ctx.paymentId,
       });
-      return { kind: "processed", eventId: recorded.eventId, verification };
+      return { kind: "processed", eventId, verification };
     } catch (error) {
       const code = isPaymentError(error) ? error.code : "unknown";
       logPaymentEvent("error", "provider_event_failed", { provider: provider.name, eventType, code });
-      await store
-        .markPaymentEventProcessed({ eventId: recorded.eventId, outcome: "error", details: { code } })
-        .catch(() => undefined);
-      return { kind: "error", eventId: recorded.eventId, code };
+      await store.markPaymentEventProcessed({ eventId, outcome: "error", details: { code } }).catch(() => undefined);
+      return { kind: "error", eventId, code };
     }
   }
 
-  return { startCheckout, createProviderCheckout, verifyPayment, handleProviderEvent };
+  async function handleProviderEvent(input: { rawBody: string; headers: Headers }): Promise<EventHandlingResult> {
+    const received = await receiveProviderEvent(input);
+    return received.kind === "accepted" ? processProviderEvent(received) : received;
+  }
+
+  // ---- customer cancel / refresh -------------------------------------------------
+  // Reads the session through the CUSTOMER's own client (RLS), so a customer
+  // can only ever act on their own checkout.
+  async function ownSession(customerDb: SupabaseClient, checkoutSessionId: string) {
+    const { data, error } = await customerDb
+      .from("checkout_sessions")
+      .select("id, status, order_id, reserved_until")
+      .eq("id", checkoutSessionId)
+      .maybeSingle();
+    if (error) throw new PaymentError("database", { checkoutSessionId }, { cause: error });
+    if (!data) throw new PaymentError("not_found", { checkoutSessionId });
+    return data as { id: string; status: string; order_id: string | null; reserved_until: string };
+  }
+
+  // Stop a checkout the customer no longer wants to pay. The provider is
+  // asked FIRST about every attempt that reached it: a paid attempt is
+  // finalized instead, an attempt still being authorized blocks the release,
+  // and only when nothing can have been paid is the stock reservation
+  // released (once, by the database). A payment arriving later anyway is
+  // handled by finalize_paid_checkout's late-payment path.
+  async function cancelCheckout(customerDb: SupabaseClient, input: unknown): Promise<CancelCheckoutResult> {
+    const { checkoutSessionId } = parseInput(z.strictObject({ checkoutSessionId: z.uuid() }), input);
+    const session = await ownSession(customerDb, checkoutSessionId);
+    if (session.status === "completed" && session.order_id) return { kind: "finalized", orderId: session.order_id };
+    if (session.status !== "awaiting_payment") return { kind: "closed", status: session.status };
+
+    for (const attempt of await store.listSessionPayments(checkoutSessionId)) {
+      if (!attempt.providerPaymentId) continue; // never reached the provider
+      if (attempt.provider !== provider.name) {
+        throw new PaymentError("configuration", { dbCode: "PAYMENT_PROVIDER_MISMATCH", paymentId: attempt.paymentId, provider: attempt.provider });
+      }
+      const result = await verifyPayment({ paymentId: attempt.paymentId });
+      if (result.kind === "finalized") return { kind: "finalized", orderId: result.orderId };
+      if (result.kind === "requires_review" || result.kind === "payment_conflict") return { kind: "requires_review" };
+      if (result.kind === "not_paid" && result.status === "processing") return { kind: "still_processing" };
+    }
+
+    const reason = new Date(session.reserved_until).getTime() <= Date.now() ? "expired" : "cancelled";
+    const outcome = await store.releaseCheckoutSession(checkoutSessionId, reason);
+    logPaymentEvent("info", "checkout_released", { checkoutSessionId, provider: provider.name, outcome });
+    if (outcome.startsWith("noop:")) {
+      const current = await ownSession(customerDb, checkoutSessionId);
+      return current.status === "completed" && current.order_id
+        ? { kind: "finalized", orderId: current.order_id }
+        : { kind: "closed", status: current.status };
+    }
+    return { kind: "released", status: reason };
+  }
+
+  // Re-verify the latest attempt of the customer's checkout with the provider
+  // (status page "check again" / auto-refresh). Never trusts browser state.
+  async function refreshCheckout(customerDb: SupabaseClient, input: unknown): Promise<VerificationResult | { kind: "no_attempt" }> {
+    const { checkoutSessionId } = parseInput(z.strictObject({ checkoutSessionId: z.uuid() }), input);
+    await ownSession(customerDb, checkoutSessionId);
+    const attempts = (await store.listSessionPayments(checkoutSessionId)).filter((a) => a.providerPaymentId);
+    const latest = attempts.at(-1);
+    if (!latest) return { kind: "no_attempt" };
+    return verifyPayment({ paymentId: latest.paymentId });
+  }
+
+  return {
+    startCheckout,
+    createProviderCheckout,
+    verifyPayment,
+    receiveProviderEvent,
+    processProviderEvent,
+    handleProviderEvent,
+    cancelCheckout,
+    refreshCheckout,
+  };
 }
 
 // Event identifiers/types from a provider: printable ASCII only, bounded.

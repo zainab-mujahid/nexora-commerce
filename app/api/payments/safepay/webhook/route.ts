@@ -1,3 +1,5 @@
+import { after } from "next/server";
+
 import { isPaymentError } from "@/lib/payments/errors";
 import { logPaymentEvent } from "@/lib/payments/log";
 import { getPaymentServiceForProvider } from "@/lib/payments/service";
@@ -11,10 +13,15 @@ import { getPaymentServiceForProvider } from "@/lib/payments/service";
 // changes, and only a verified exact USD payment can create an order.
 //
 // Responses carry no details. 401 for unauthentic requests; 200 for every
-// authentic delivery once it is recorded — including duplicates and events
-// whose processing failed (stored with outcome 'error' for reconciliation),
-// since a retry of an already-recorded event would be ignored as a duplicate
-// anyway. 503 when payments aren't configured, so Safepay retries later.
+// authentic delivery once it is durably recorded — including duplicates.
+// Safepay treats anything not acknowledged within 10 s as failed, and the
+// authoritative verification (provider lookup + database finalize) can take
+// longer, so it runs AFTER the response via after() (Safepay's own guidance:
+// store the event, acknowledge, then apply business logic). If that work
+// fails or the process stops, the event stays recorded (outcome 'error' /
+// unprocessed) for reconciliation, and the customer's return page performs
+// the same idempotent verification anyway. 503 when payments aren't
+// configured, so Safepay retries later.
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -66,10 +73,17 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await getPaymentServiceForProvider("safepay").handleProviderEvent({ rawBody, headers: request.headers });
-    if (result.kind === "rejected") {
+    const service = getPaymentServiceForProvider("safepay");
+    const received = await service.receiveProviderEvent({ rawBody, headers: request.headers });
+    if (received.kind === "rejected") {
       noteRejected(key, now);
       return json(401, { received: false });
+    }
+    if (received.kind === "accepted") {
+      after(async () => {
+        const result = await service.processProviderEvent(received);
+        logPaymentEvent(result.kind === "error" ? "error" : "info", "webhook_processed", { provider: "safepay", outcome: result.kind, eventType: received.eventType });
+      });
     }
     return json(200, { received: true });
   } catch (error) {

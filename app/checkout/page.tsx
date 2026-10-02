@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import Link from "next/link";
 import type { Metadata } from "next";
 
@@ -5,6 +7,8 @@ import { Reveal } from "@/app/_components/motion/reveal";
 import { requireUser } from "@/lib/auth/dal";
 import { getAddresses } from "@/lib/addresses/queries";
 import { getCartSummary } from "@/lib/cart/queries";
+import { getOwnActiveCheckout } from "@/lib/checkout/queries";
+import { getPaymentAvailability } from "@/lib/payments/presentation";
 
 import { CheckoutForm } from "./checkout-form";
 
@@ -18,10 +22,31 @@ export default async function CheckoutPage() {
   // convention app/cart/page.tsx and app/account/addresses/page.tsx follow.
   await requireUser();
 
-  const [{ items, subtotal }, addresses] = await Promise.all([
+  const [{ items, subtotal }, addresses, activeCheckout] = await Promise.all([
     getCartSummary(),
     getAddresses(),
+    getOwnActiveCheckout(),
   ]);
+
+  // A payment already in progress: continue (or cancel) that one rather than
+  // reserving the cart a second time. Its items are already held, which is
+  // also why the cart's stock figures would look short here.
+  if (activeCheckout) {
+    return (
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+        <CheckoutHeading />
+        <div className="card surface-glow mx-auto flex w-full max-w-xl flex-col items-center gap-3 p-8 text-center">
+          <p className="font-medium">You have a payment in progress</p>
+          <p className="max-w-sm text-sm text-muted">
+            Your items are reserved while you finish paying. Continue that payment, or cancel it to start again.
+          </p>
+          <Link href={`/checkout/payment/${activeCheckout.id}`} className="btn btn-primary mt-2">
+            Continue payment
+          </Link>
+        </div>
+      </main>
+    );
+  }
 
   if (items.length === 0) {
     return (
@@ -38,7 +63,7 @@ export default async function CheckoutPage() {
     );
   }
 
-  // A fast, client-visible signal only — place_order() re-validates
+  // A fast, client-visible signal only — begin_checkout() re-validates
   // availability and stock authoritatively regardless of what this renders.
   // item.product is null when RLS hides an inactive product from this
   // customer's own SELECT (see the CartItem["product"] comment in
@@ -77,6 +102,8 @@ export default async function CheckoutPage() {
         subtotal={subtotal}
         addresses={addresses}
         disableSubmit={hasBlockingIssue}
+        idempotencyKey={randomUUID()}
+        payment={getPaymentAvailability()}
       />
     </main>
   );

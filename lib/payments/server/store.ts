@@ -92,7 +92,20 @@ export interface PaymentStore {
     paymentId?: string | null;
     details?: PaymentEventDetails;
   }): Promise<void>;
+  // All payment attempts of one checkout session, oldest first.
+  listSessionPayments(checkoutSessionId: string): Promise<SessionPayment[]>;
+  // P1 release_checkout_session(): restores the reservation exactly once.
+  // Only call after the provider confirmed nothing was paid.
+  releaseCheckoutSession(checkoutSessionId: string, reason: "cancelled" | "expired"): Promise<string>;
 }
+
+export type SessionPayment = {
+  paymentId: string;
+  provider: PaymentProviderName;
+  providerPaymentId: string | null;
+  status: PaymentStatus;
+  orderId: string | null;
+};
 
 // ---- database error -> PaymentError ---------------------------------------
 // P1 functions raise 'CODE' or 'CODE:<id>'. Only that machine code (and the
@@ -126,6 +139,9 @@ const DB_CODE_MAP: Record<string, PaymentErrorCode> = {
   SIGNATURE_RESULT_REQUIRED: "invalid_input",
   INVALID_EVENT_OUTCOME: "invalid_input",
   PAYMENT_EVENT_NOT_FOUND: "not_found",
+  INVALID_RELEASE_REASON: "invalid_input",
+  RESERVATION_NOT_EXPIRED: "conflict",
+  PAYMENT_ALREADY_SETTLED: "conflict",
 };
 
 type DbError = { message?: string; code?: string };
@@ -273,6 +289,32 @@ export function createSupabasePaymentStore(admin: SupabaseClient): PaymentStore 
         p_details: input.details ?? null,
       });
       if (error) throw toPaymentError(error);
+    },
+
+    async listSessionPayments(checkoutSessionId) {
+      const { data, error } = await admin
+        .from("payments")
+        .select("id, provider, provider_payment_id, status, order_id, created_at")
+        .eq("checkout_session_id", checkoutSessionId)
+        .order("created_at", { ascending: true });
+      if (error) throw toPaymentError(error, { checkoutSessionId });
+      return (data ?? []).map((row) => ({
+        paymentId: row.id,
+        provider: row.provider,
+        providerPaymentId: row.provider_payment_id ?? null,
+        status: asPaymentStatus(row.status),
+        orderId: row.order_id ?? null,
+      }));
+    },
+
+    async releaseCheckoutSession(checkoutSessionId, reason) {
+      const { data, error } = await admin.rpc("release_checkout_session", {
+        p_checkout_session_id: checkoutSessionId,
+        p_reason: reason,
+      });
+      if (error) throw toPaymentError(error, { checkoutSessionId });
+      if (typeof data !== "string") throw new PaymentError("invariant", { checkoutSessionId, dbCode: "UNEXPECTED_RELEASE_RESULT" });
+      return data;
     },
   };
 }

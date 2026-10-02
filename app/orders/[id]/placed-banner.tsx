@@ -2,17 +2,16 @@
 
 import { useSearchParams } from "next/navigation";
 
-// placeOrder() redirects here with `?placed=1` (see lib/checkout/actions.ts).
-// That redirect runs inside a Server Action, and Next.js performs a
-// client-side (soft) navigation for it whenever JS is available — this
-// page's server `searchParams` prop reflects whatever the client router's
-// RSC fetch resolved for that navigation, not necessarily the exact live
-// browser URL. useSearchParams() instead reads directly off the client
-// router's current URL state, which is what the address bar actually shows,
-// so it can't drift from it across either a hard or soft navigation.
-export function PlacedBanner() {
+// Thank-you banner for the visit right after checkout. `?placed=1` only
+// decides WHETHER to greet (it comes from our own redirect after
+// verification); `paid` comes from the order row in the database, so a
+// hand-typed ?placed=1 can never make an unpaid order look paid.
+//
+// useSearchParams() reads the client router's current URL, which is what the
+// address bar shows after the server-side redirect's soft navigation.
+export function PlacedBanner({ paid }: { paid: boolean }) {
   const searchParams = useSearchParams();
-  if (searchParams.get("placed") !== "1") return null;
+  if (searchParams.get("placed") !== "1" || !paid) return null;
 
   return (
     <p className="flex gap-2.5 rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-foreground">
@@ -21,8 +20,8 @@ export function PlacedBanner() {
         <path d="m6.8 10.2 2.2 2.2 4.2-4.6" />
       </svg>
       <span>
-        Thanks for your order — we&apos;ll get it ready. This order is unpaid pending
-        payment integration; no payment has been charged.
+        <strong className="font-semibold">Payment confirmed — thank you for your order.</strong> We&apos;ll get it ready and
+        you can follow its status here.
       </span>
     </p>
   );

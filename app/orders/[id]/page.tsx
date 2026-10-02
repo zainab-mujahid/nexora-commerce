@@ -6,7 +6,9 @@ import { Suspense } from "react";
 import { requireUser } from "@/lib/auth/dal";
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { formatPrice } from "@/lib/catalog/format";
-import { getOrderById } from "@/lib/orders/queries";
+import { TestModeBadge } from "@/app/_components/test-mode-badge";
+import { getOrderById, getOrderPaymentMethod } from "@/lib/orders/queries";
+import { getPaymentAvailability } from "@/lib/payments/presentation";
 
 import { PlacedBanner } from "./placed-banner";
 
@@ -24,6 +26,15 @@ export default async function OrderDetailPage({
   if (!order) notFound();
 
   const address = order.shipping_address;
+  const paymentMethod = order.payment_status === "not_collected" ? null : await getOrderPaymentMethod(order.id);
+  const availability = getPaymentAvailability();
+  const testMode = order.payment_status !== "not_collected" && availability.available && availability.testMode;
+  const paymentLabel: Record<typeof order.payment_status, string> = {
+    paid: "Paid",
+    partially_refunded: "Partially refunded",
+    refunded: "Refunded",
+    not_collected: "No online payment recorded",
+  };
 
   // Everything below is the order's own recorded data: item names and prices
   // are order_items snapshots and the address is the orders.shipping_address
@@ -47,7 +58,7 @@ export default async function OrderDetailPage({
           </span>
         </div>
         <Suspense fallback={null}>
-          <PlacedBanner />
+          <PlacedBanner paid={order.payment_status === "paid"} />
         </Suspense>
       </div>
 
@@ -93,6 +104,22 @@ export default async function OrderDetailPage({
               <div className="flex flex-col gap-1">
                 <dt className="text-muted">Placed on</dt>
                 <dd className="tabular-nums">{new Date(order.created_at).toLocaleString()}</dd>
+              </div>
+              <div className="flex flex-col gap-1">
+                <dt className="text-muted">Payment</dt>
+                <dd className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {paymentLabel[order.payment_status]}
+                    {paymentMethod && (
+                      <span className="text-muted">
+                        {" · "}
+                        {paymentMethod.brand ?? "Card"}
+                        {paymentMethod.last4 ? ` •••• ${paymentMethod.last4}` : ""}
+                      </span>
+                    )}
+                  </span>
+                  {testMode && <TestModeBadge />}
+                </dd>
               </div>
             </dl>
           </section>

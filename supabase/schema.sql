@@ -614,11 +614,17 @@ begin
 end;
 $$;
 
--- Functions grant EXECUTE to PUBLIC by default, which would let even the
--- unauthenticated `anon` role attempt to call this — revoke that and grant
--- only to authenticated, matching every other write path in this file.
-revoke all on function public.place_order(uuid) from public;
-grant execute on function public.place_order(uuid) to authenticated;
+-- Payments P4 (checkout switch): no role may call place_order() any more.
+-- It created an order WITHOUT payment; customer checkout now goes through
+-- begin_checkout() -> verified payment -> finalize_paid_checkout(), and an
+-- orders row must mean "payment verified". The function itself is kept (it
+-- documents how legacy orders were created, and those orders keep
+-- payment_status = 'not_collected'), but EXECUTE is revoked from every API
+-- role — explicitly from anon/authenticated as well as PUBLIC, since
+-- Supabase's default privileges grant new functions to them directly and the
+-- earlier version of this file granted authenticated. Re-running this file
+-- always leaves it revoked.
+revoke all on function public.place_order(uuid) from public, anon, authenticated, service_role;
 
 -- ============================================================================
 -- Step 15 bug fix — get_own_cart_product_names()

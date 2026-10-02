@@ -31,9 +31,15 @@ export type OrderDetailItem = {
   subtotal: string;
 };
 
+export type OrderPaymentStatus = "paid" | "partially_refunded" | "refunded" | "not_collected";
+
 export type OrderDetail = {
   id: string;
   status: string;
+  // Payment summary, separate from the fulfilment status above.
+  // not_collected = placed before online payments / no payment recorded.
+  payment_status: OrderPaymentStatus;
+  currency: string;
   subtotal: string;
   total: string;
   shipping_address: OrderShippingAddress;
@@ -70,7 +76,7 @@ export const getOrders = cache(async (): Promise<OrderListItem[]> => {
 });
 
 const ORDER_DETAIL_SELECT =
-  "id, status, subtotal, total, shipping_address, created_at, items:order_items(id, product_id, product_name, unit_price, quantity, subtotal)";
+  "id, status, payment_status, currency, subtotal, total, shipping_address, created_at, items:order_items(id, product_id, product_name, unit_price, quantity, subtotal)";
 
 // orderId comes straight from the URL. Postgres rejects a non-UUID string
 // for a uuid column with an error (not an empty result), which the by-id
@@ -108,6 +114,7 @@ export const getOrderById = cache(
     // or deleted.
     return {
       ...data,
+      payment_status: data.payment_status as OrderPaymentStatus,
       shipping_address: data.shipping_address as unknown as OrderShippingAddress,
     };
   },
@@ -170,7 +177,29 @@ export const getAdminOrderById = cache(
 
     return {
       ...data,
+      payment_status: data.payment_status as OrderPaymentStatus,
       shipping_address: data.shipping_address as unknown as OrderShippingAddress,
     };
   },
 );
+
+// Safe display of how an order was paid (card brand + last four digits),
+// from the customer's own payment row (RLS payments_select_own_or_admin).
+// null for orders without an online payment.
+export type OrderPaymentMethod = { brand?: string; last4?: string };
+
+export const getOrderPaymentMethod = cache(async (orderId: string): Promise<OrderPaymentMethod | null> => {
+  if (!orderIdSchema.safeParse(orderId).success) return null;
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("payments")
+    .select("display_summary")
+    .eq("order_id", orderId)
+    .in("status", ["paid", "partially_refunded", "refunded"])
+    .maybeSingle();
+  if (error || !data) return null;
+  const summary = data.display_summary as { brand?: unknown; last4?: unknown } | null;
+  const brand = typeof summary?.brand === "string" ? summary.brand : undefined;
+  const last4 = typeof summary?.last4 === "string" && /^[0-9]{4}$/.test(summary.last4) ? summary.last4 : undefined;
+  return brand || last4 ? { brand, last4 } : null;
+});
