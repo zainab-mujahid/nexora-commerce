@@ -108,10 +108,10 @@ export const getOrderById = cache(
 
     // shipping_address is stored as jsonb with no generated Database types
     // to describe its shape, so postgrest-js infers it as generic Json —
-    // this is the checkout-time snapshot place_order() wrote, never a live
-    // reference to the addresses table (see supabase/schema.sql), which is
-    // exactly why it's still correct even if the address was since edited
-    // or deleted.
+    // this is the checkout-time snapshot taken when the order was created,
+    // never a live reference to the addresses table (see
+    // supabase/schema.sql), which is exactly why it's still correct even if
+    // the address was since edited or deleted.
     return {
       ...data,
       payment_status: data.payment_status as OrderPaymentStatus,

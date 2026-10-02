@@ -52,8 +52,8 @@ export async function updateOrderStatus(
 }
 
 // Cancellation is a separate, narrower action from updateOrderStatus above
-// because it isn't a plain status write: it must also restore the stock
-// place_order() decremented, so it goes through admin_cancel_order() (see
+// because it isn't a plain status write: it must also restore the stock the
+// order took when it was placed, so it goes through admin_cancel_order() (see
 // supabase/schema.sql), one atomic transaction instead of two separate
 // requests that could leave stock and status inconsistent with each other.
 export async function cancelOrder(

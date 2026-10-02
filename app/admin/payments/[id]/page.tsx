@@ -282,7 +282,7 @@ export default async function AdminPaymentDetailPage({ params }: PageProps<"/adm
                 {detail.events.map((e) => (
                   <li key={e.id} className="flex flex-col gap-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs [overflow-wrap:anywhere]">{e.kind === "internal" ? "Verification check" : e.eventType}</span>
+                      <span className="font-mono text-xs [overflow-wrap:anywhere]">{e.kind === "internal" ? (e.eventType === "internal.refund_review_cleared" ? "Refund review lifted" : "Verification check") : e.eventType}</span>
                       <span className="text-xs text-muted tabular-nums">{when(e.receivedAt)}</span>
                     </span>
                     <span className="text-xs">

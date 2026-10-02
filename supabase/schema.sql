@@ -343,10 +343,11 @@ drop policy if exists "orders_select_own_or_admin" on public.orders;
 create policy "orders_select_own_or_admin" on public.orders
   for select using (user_id = auth.uid() or public.is_admin());
 
--- Step 23D: no customer INSERT policy. Orders are created only by
--- place_order() (SECURITY DEFINER), which never needed one; a direct-insert
--- path let a customer fabricate totals/prices/quantities/status. The drop
--- stays so re-running this file removes it from an existing database.
+-- Step 23D: no customer INSERT policy. Orders are created only by a
+-- SECURITY DEFINER function (finalize_paid_checkout() since Payments P4),
+-- which never needed one; a direct-insert path let a customer fabricate
+-- totals/prices/quantities/status. The drop stays so re-running this file
+-- removes it from an existing database.
 drop policy if exists "orders_insert_own" on public.orders;
 
 -- Step 24B: `cancelled` is terminal and can only be entered through
@@ -366,8 +367,8 @@ create policy "orders_update_admin_only" on public.orders
 
 -- ---- order_items ----
 -- access follows the parent order: readable by its owner or an admin.
--- Never insertable by a customer directly — only place_order() writes rows
--- here (see the orders_insert_own note above).
+-- Never insertable by a customer directly — only finalize_paid_checkout()
+-- writes rows here (see the orders_insert_own note above).
 drop policy if exists "order_items_select_via_order" on public.order_items;
 create policy "order_items_select_via_order" on public.order_items
   for select using (
@@ -451,16 +452,17 @@ grant select, insert, update, delete on public.addresses to authenticated;
 
 -- orders: authenticated only. No delete grant — matches the RLS design;
 -- orders are permanent, undeletable records. No insert grant (Step 23D):
--- place_order() is the only creation path. The explicit revokes are needed
--- because re-running a narrower grant never removes an earlier one.
+-- finalize_paid_checkout() is the only creation path. The explicit revokes
+-- are needed because re-running a narrower grant never removes an earlier one.
 --
 -- UPDATE is column-level: only status/updated_at, the two columns the admin
 -- status change (lib/admin/orders.ts) writes; RLS orders_update_admin_only
 -- still decides who and which rows. user_id, totals, shipping_address and
--- created_at are fixed once place_order() writes them. Revoking table-level
+-- created_at are fixed once the order is written. Revoking table-level
 -- UPDATE also drops any column-level UPDATE grants, so the revoke has to
--- come before the column grant. place_order() and admin_cancel_order() are
--- SECURITY DEFINER (run as the table owner), so this doesn't restrict them.
+-- come before the column grant. finalize_paid_checkout() and
+-- admin_cancel_order() are SECURITY DEFINER (run as the table owner), so this
+-- doesn't restrict them.
 grant select on public.orders to authenticated;
 revoke insert on public.orders from authenticated;
 revoke update on public.orders from authenticated;
@@ -468,163 +470,24 @@ revoke update on public.orders from anon;
 grant update (status, updated_at) on public.orders to authenticated;
 
 -- order_items: authenticated only, select only. No insert/update/delete
--- grant — line items are written only by place_order() and are immutable
--- price/name snapshots once an order is placed.
+-- grant — line items are written only by finalize_paid_checkout() and are
+-- immutable price/name snapshots once an order is placed.
 grant select on public.order_items to authenticated;
 revoke insert on public.order_items from authenticated;
 
 -- ============================================================================
--- Step 15 — Checkout: place_order()
+-- Legacy checkout: place_order() — REMOVED (final payment hardening)
 --
--- Converting a cart into an order touches four tables (orders, order_items,
--- products.stock, cart_items) that must all succeed or all fail together.
--- PostgREST only ever executes one statement per request, so there is no way
--- to wrap "insert order -> insert order_items -> decrement stock -> clear
--- cart" in a single client-driven transaction — a partial failure between
--- separate requests could leave an order without its items, stock
--- decremented without an order behind it, or a cleared cart with no order at
--- all. A single SQL function called via `supabase.rpc()` runs as one
--- Postgres transaction, so any exception (bad address, empty cart,
--- unavailable product, insufficient stock) rolls back everything atomically.
---
--- SECURITY DEFINER is required (not just convenient) because decrementing
--- products.stock is gated by products_write_admin — an ordinary customer's
--- session has no UPDATE privilege on products, by design. Running as the
--- table owner bypasses that RLS check for this one, narrowly-scoped
--- operation, the same pattern already used by is_admin() above. Because
--- SECURITY DEFINER functions are not subject to RLS, this function performs
--- every authorization check itself: it takes no user_id parameter and
--- derives the caller exclusively from auth.uid(), verifies the address
--- belongs to that same user, and only ever reads/writes that user's own
--- cart_items.
---
--- `for update of c, p` locks each matching cart_items row together with its
--- product row for the rest of the transaction. That closes two race
--- windows at once: two concurrent checkouts can't both read the same stock
--- count and both succeed into an oversold state, and a concurrent
--- add-to-cart/update-quantity request against the very items being checked
--- out blocks until this transaction commits or rolls back, so the
--- order/stock/cart-clear below can never act on a cart that changed after
--- validation ran.
+-- Step 15's place_order() turned a cart into an order WITHOUT any payment. The
+-- payment-first checkout (Payments P4) replaced it: begin_checkout() ->
+-- verified provider payment -> finalize_paid_checkout() is now the only way an
+-- order is created, and an orders row means "payment verified" (orders placed
+-- before online payments keep payment_status = 'not_collected'). P4 revoked
+-- EXECUTE from every role; nothing in the application or the database calls
+-- it, so it is dropped rather than kept as dead, privileged code. Re-running
+-- this file removes it from any database that still has it.
 -- ============================================================================
-create or replace function public.place_order(p_address_id uuid)
-returns uuid
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_user_id   uuid := auth.uid();
-  v_address   jsonb;
-  v_order_id  uuid;
-  v_subtotal  numeric(10, 2) := 0;
-  v_item      record;
-  v_has_items boolean := false;
-  -- Step 23D: exactly the product ids validated/priced/locked below. Every
-  -- later statement is restricted to this set: in READ COMMITTED each
-  -- statement takes a fresh snapshot, and row locks can't block a brand-new
-  -- cart_items row, so re-reading "the user's whole cart" would pick up an
-  -- item added concurrently after validation (unvalidated, unpriced in the
-  -- total, yet ordered, stock-decremented and deleted). With this set, such
-  -- an item is simply left in the cart for a later checkout. Locked rows
-  -- can't change their quantity/price meanwhile, and unique(user_id,
-  -- product_id) makes a product id identify one cart row.
-  v_product_ids uuid[] := '{}';
-begin
-  if v_user_id is null then
-    raise exception 'AUTH_REQUIRED';
-  end if;
-
-  select jsonb_build_object(
-    'full_name', a.full_name,
-    'line1', a.line1,
-    'line2', a.line2,
-    'city', a.city,
-    'state', a.state,
-    'postal_code', a.postal_code,
-    'country', a.country
-  )
-  into v_address
-  from public.addresses a
-  where a.id = p_address_id and a.user_id = v_user_id;
-
-  if v_address is null then
-    raise exception 'ADDRESS_NOT_FOUND';
-  end if;
-
-  -- Validate availability/stock and compute the authoritative subtotal from
-  -- current database prices in one pass, while locking every cart_items/
-  -- products row involved (see comment above).
-  --
-  -- Step 24C: `order by p.id` makes the product row locks be taken in
-  -- product-id order (the lock step runs above the sort). Without it the
-  -- order followed the join plan — e.g. each customer's cart insertion
-  -- order — so two checkouts (or a checkout and admin_cancel_order(), which
-  -- locks in the same id order) sharing products could lock them in opposite
-  -- orders and deadlock (40P01).
-  for v_item in
-    select c.product_id, c.quantity, p.price, p.stock, p.is_active
-    from public.cart_items c
-    join public.products p on p.id = c.product_id
-    where c.user_id = v_user_id
-    order by p.id
-    for update of c, p
-  loop
-    v_has_items := true;
-
-    if not v_item.is_active then
-      raise exception 'PRODUCT_UNAVAILABLE:%', v_item.product_id;
-    end if;
-    if v_item.stock < v_item.quantity then
-      raise exception 'INSUFFICIENT_STOCK:%', v_item.product_id;
-    end if;
-
-    v_subtotal := v_subtotal + (v_item.price * v_item.quantity);
-    v_product_ids := v_product_ids || v_item.product_id;
-  end loop;
-
-  if not v_has_items then
-    raise exception 'CART_EMPTY';
-  end if;
-
-  -- No shipping/tax/discount model exists yet (see implementation plan) —
-  -- total intentionally equals subtotal until that's introduced.
-  insert into public.orders (user_id, status, subtotal, total, shipping_address)
-  values (v_user_id, 'pending', v_subtotal, v_subtotal, v_address)
-  returning id into v_order_id;
-
-  insert into public.order_items (order_id, product_id, product_name, unit_price, quantity, subtotal)
-  select v_order_id, p.id, p.name, p.price, c.quantity, p.price * c.quantity
-  from public.cart_items c
-  join public.products p on p.id = c.product_id
-  where c.user_id = v_user_id
-    and c.product_id = any(v_product_ids);
-
-  update public.products p
-  set stock = p.stock - c.quantity
-  from public.cart_items c
-  where c.product_id = p.id and c.user_id = v_user_id
-    and c.product_id = any(v_product_ids);
-
-  delete from public.cart_items
-  where user_id = v_user_id
-    and product_id = any(v_product_ids);
-
-  return v_order_id;
-end;
-$$;
-
--- Payments P4 (checkout switch): no role may call place_order() any more.
--- It created an order WITHOUT payment; customer checkout now goes through
--- begin_checkout() -> verified payment -> finalize_paid_checkout(), and an
--- orders row must mean "payment verified". The function itself is kept (it
--- documents how legacy orders were created, and those orders keep
--- payment_status = 'not_collected'), but EXECUTE is revoked from every API
--- role — explicitly from anon/authenticated as well as PUBLIC, since
--- Supabase's default privileges grant new functions to them directly and the
--- earlier version of this file granted authenticated. Re-running this file
--- always leaves it revoked.
-revoke all on function public.place_order(uuid) from public, anon, authenticated, service_role;
+drop function if exists public.place_order(uuid);
 
 -- ============================================================================
 -- Step 15 bug fix — get_own_cart_product_names()
@@ -713,9 +576,10 @@ grant execute on function public.get_own_wishlist_unavailable_product_names() to
 -- Step 18 — Admin Order Management: admin_cancel_order()
 --
 -- Cancelling an order has to update orders.status AND restore the stock
--- place_order() decremented for each item — those two writes must succeed
--- or fail together, for the same reason place_order() itself is one atomic
--- function rather than several client calls (see the comment above it).
+-- taken for each item when the order was placed (reserved by begin_checkout()
+-- for paid orders; decremented by the legacy, since-dropped place_order() for
+-- older ones) — those two writes must succeed or fail together, so this is
+-- one atomic function rather than several client calls.
 --
 -- Step 24B: SECURITY DEFINER. orders_update_admin_only now refuses any
 -- direct UPDATE that sets status to 'cancelled' (and any UPDATE of an
@@ -762,7 +626,7 @@ begin
   end if;
 
   -- Step 24C: lock this order's product rows in product-id order — the same
-  -- order place_order() uses — before restoring stock. The UPDATE below
+  -- order every checkout/payment function uses — before restoring stock. The UPDATE below
   -- would otherwise lock them in join-plan order (the order's line order),
   -- which can deadlock (40P01) against a concurrent checkout of the same
   -- products taken in the opposite order.
@@ -806,9 +670,8 @@ grant execute on function public.admin_cancel_order(uuid) to authenticated;
 -- second, divergent shape for product data. Never executes any dynamic/
 -- generated SQL — the query below is fixed at function-definition time.
 --
--- NOT SECURITY DEFINER, unlike place_order()/admin_cancel_order() above:
--- those needed it because an ordinary customer session has no RLS-granted
--- UPDATE on products/orders. This function only ever SELECTs, and every row
+-- NOT SECURITY DEFINER, unlike admin_cancel_order() above: that needed it
+-- because an ordinary session has no RLS-granted UPDATE on products/orders. This function only ever SELECTs, and every row
 -- it can return is a row products_select_active_or_admin already lets the
 -- calling role see (is_active or is_admin()) — there is no privilege gap to
 -- bridge, so it runs with the caller's own rights. It still re-applies
@@ -1220,9 +1083,8 @@ grant execute on function public.search_catalog_products(text, extensions.vector
 --   or   -> release_checkout_session() reservation returned exactly once
 --
 -- An orders row created through this flow means "payment was verified and
--- the order is confirmed". place_order() above is intentionally untouched
--- and still callable: the current checkout depends on it until the
--- checkout-switch phase revokes it together with the application change.
+-- the order is confirmed". (The legacy place_order() was revoked at the
+-- checkout switch, P4, and has since been dropped.)
 --
 -- Provider-neutral by design: no provider-specific columns or states. A
 -- provider adapter maps its own statuses onto the generic ones before
@@ -1232,8 +1094,8 @@ grant execute on function public.search_catalog_products(text, extensions.vector
 --   1. a per-user transaction advisory lock is taken FIRST, so all checkout
 --      and payment mutations for one customer run one at a time;
 --   2. then row locks in a fixed order: checkout session -> payment(s) ->
---      products (always in product-id order, the same order place_order()
---      and admin_cancel_order() use) -> cart_items (product-id order).
+--      products (always in product-id order, the same order
+--      admin_cancel_order() uses) -> cart_items (product-id order).
 --
 -- Every function here is SECURITY DEFINER with an empty search_path and
 -- fully schema-qualified references. begin_checkout() is callable by
@@ -1309,8 +1171,7 @@ revoke all on function public.payment_event_details_is_valid(jsonb) from public,
 --
 -- amount_minor is the provider-facing amount in USD cents. The CHECK ties it
 -- exactly to total (numeric(10,2) * 100 is always integral), so the two can
--- never disagree. total equals subtotal until a shipping/tax model exists
--- (same rule as place_order()).
+-- never disagree. total equals subtotal until a shipping/tax model exists.
 create table if not exists public.checkout_sessions (
   id               uuid primary key default gen_random_uuid(),
   user_id          uuid not null references auth.users (id) on delete cascade,
@@ -1483,7 +1344,8 @@ create index if not exists payment_events_unprocessed_idx
 --   not_collected       — no online payment recorded by this system: every
 --                         order placed before online payments (backfilled by
 --                         the default below) and any order still created by
---                         place_order() until the checkout switch.
+--                         the legacy place_order() before the checkout
+--                         switch (P4).
 --   paid / partially_refunded / refunded — orders created by
 --                         finalize_paid_checkout() after a verified payment.
 -- Adding the columns with defaults backfills existing rows; re-running is a
@@ -1588,9 +1450,9 @@ grant select on public.checkout_sessions, public.checkout_session_items, public.
 -- ============================================================================
 -- begin_checkout(): reserve stock into a checkout session (customer RPC)
 --
--- Replaces the FIRST half of place_order() for the online-payment flow,
--- with the same validation and the same locking (cart_items + products
--- locked together, products in id order). Differences: it creates a
+-- Took over the FIRST half of the legacy place_order() (since dropped) for
+-- the online-payment flow, with the same validation and the same locking
+-- (cart_items + products locked together, products in id order). Differences: it creates a
 -- checkout_session instead of an order, does NOT clear the cart, and is
 -- idempotent on (customer, p_idempotency_key).
 --
@@ -1630,8 +1492,8 @@ declare
   v_subtotal    numeric(10, 2) := 0;
   v_item        record;
   v_has_items   boolean := false;
-  -- Same role as in place_order(): later statements touch exactly the
-  -- validated/locked products, never cart rows added concurrently.
+  -- Later statements touch exactly the validated/locked products, never
+  -- cart rows added concurrently.
   v_product_ids uuid[] := '{}';
 begin
   if v_user_id is null then
@@ -3024,6 +2886,38 @@ create trigger payment_refunds_guard
   before update or delete on public.payment_refunds
   for each row execute function public.payment_refunds_guard();
 
+-- The ledger's confirmed total can never exceed the payment's paid amount,
+-- whatever writes it (final hardening). Callers hold the payment row lock, so
+-- the sum is stable while it is checked.
+create or replace function public.payment_refunds_total_guard()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_paid  bigint;
+  v_other bigint;
+begin
+  if new.status = 'succeeded' and (tg_op = 'INSERT' or old.status <> 'succeeded') then
+    select p.amount_minor into v_paid from public.payments p where p.id = new.payment_id;
+    select coalesce(sum(r.amount_minor), 0) into v_other
+    from public.payment_refunds r
+    where r.payment_id = new.payment_id and r.status = 'succeeded' and r.id <> new.id;
+    if v_other + new.amount_minor > v_paid then
+      raise exception 'REFUND_TOTAL_EXCEEDS_PAYMENT';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.payment_refunds_total_guard() from public, anon, authenticated, service_role;
+
+drop trigger if exists payment_refunds_total_guard on public.payment_refunds;
+create trigger payment_refunds_total_guard
+  before insert or update on public.payment_refunds
+  for each row execute function public.payment_refunds_total_guard();
+
 alter table public.payment_refunds enable row level security;
 
 -- Internal operations data (admin identity, notes, provider ids): admin only.
@@ -3287,15 +3181,23 @@ grant execute on function public.record_refund_attempt(uuid, text, text, bigint,
 --      exist by now), otherwise still open;
 --   3. remaining unmatched provider refunds are recorded as origin
 --      'provider' (real money movements Nexora did not request).
--- Then the ledger total must agree with the provider: total <= paid amount,
--- paid - total = provider balance, and the provider's status must match
--- (no refunds -> paid, some -> partially_refunded, all -> refunded).
+-- A refund is never confirmed (or recorded) if that would put the ledger's
+-- confirmed total above the paid amount — that is an issue instead (and the
+-- payment_refunds_total_guard trigger enforces it regardless).
+-- Then the ledger total must agree with the provider: paid - total =
+-- provider balance, and the provider's status must match (no refunds ->
+-- paid, some -> partially_refunded, all -> refunded).
 -- Any disagreement moves the payment to requires_review with the reason; a
 -- payment already under review keeps its original reason. Otherwise the
--- payment (and its order's payment_status) follows the ledger. A payment
--- under review whose money is verifiably this checkout's settled payment
--- moves to its refund status (same rule as record_payment_status); a
--- duplicate charge stays under review. Fulfilment and stock are never touched.
+-- payment (and its order's payment_status) follows the ledger.
+-- Under review for a refund-ledger reason: stays there, except a possible
+-- provider timing gap (REFUND_MISSING_AT_PROVIDER / REFUND_BALANCE_MISMATCH /
+-- REFUND_STATE_MISMATCH) that a fresh lookup now fully resolves (see step 5);
+-- that automatic lift is recorded as an internal payment event.
+-- Under review for another reason (dispute, duplicate...): a payment whose
+-- money is verifiably this checkout's settled payment moves to its refund
+-- status (same rule as record_payment_status); a duplicate charge stays under
+-- review. Fulfilment and stock are never touched.
 --
 -- Returns the payment's status afterwards, the issue code (or null) and how
 -- many ledger rows changed.
@@ -3329,6 +3231,8 @@ declare
   v_new       text;
   v_grace     interval := interval '10 minutes';
   v_settled_other boolean;
+  v_open      boolean;
+  v_ledger_review boolean;
 begin
   if p_provider_status is null or p_provider_status not in ('pending', 'processing', 'paid', 'failed', 'cancelled',
        'expired', 'refunded', 'partially_refunded', 'requires_review')
@@ -3371,6 +3275,13 @@ begin
     raise exception 'PAYMENT_NOT_SETTLED';
   end if;
 
+  -- Confirmed refunds so far; a refund is only ever confirmed while the
+  -- ledger total stays within the paid amount (also enforced by the
+  -- payment_refunds_total_guard trigger).
+  select coalesce(sum(r.amount_minor), 0) into v_total
+  from public.payment_refunds r
+  where r.payment_id = v_payment.id and r.status = 'succeeded';
+
   -- 1. Ledger refunds that carry a provider id.
   for v_row in
     select r.* from public.payment_refunds r
@@ -3403,6 +3314,9 @@ begin
       -- Newly voided at the provider: money that was returned is back with
       -- the merchant. Review it once; a known void is not a new finding.
       if v_row.status <> 'voided' then
+        if v_row.status = 'succeeded' then
+          v_total := v_total - v_row.amount_minor;
+        end if;
         update public.payment_refunds
         set status = 'voided', completed_at = coalesce(completed_at, now()), last_checked_at = now()
         where id = v_row.id;
@@ -3410,10 +3324,21 @@ begin
         v_issue := coalesce(v_issue, 'PROVIDER_REFUND_VOIDED');
       end if;
     elsif v_row.status in ('requested', 'requires_reconciliation') then
-      update public.payment_refunds
-      set status = 'succeeded', completed_at = now(), failure_code = null, last_checked_at = now()
-      where id = v_row.id;
-      v_changed := v_changed + 1;
+      if v_total + v_row.amount_minor > v_payment.amount_minor then
+        -- Confirming it would put the ledger above what was paid.
+        if v_row.status = 'requested' then
+          update public.payment_refunds set status = 'requires_reconciliation', failure_code = 'REFUND_TOTAL_EXCEEDS_PAYMENT'
+          where id = v_row.id;
+          v_changed := v_changed + 1;
+        end if;
+        v_issue := coalesce(v_issue, 'REFUND_TOTAL_EXCEEDS_PAYMENT');
+      else
+        update public.payment_refunds
+        set status = 'succeeded', completed_at = now(), failure_code = null, last_checked_at = now()
+        where id = v_row.id;
+        v_total := v_total + v_row.amount_minor;
+        v_changed := v_changed + 1;
+      end if;
     else
       update public.payment_refunds set last_checked_at = now() where id = v_row.id;
     end if;
@@ -3437,11 +3362,21 @@ begin
       and (e ->> 'amount_minor')::bigint = v_row.amount_minor
       and (e ->> 'currency') = v_row.currency;
 
-    if jsonb_array_length(v_cands) = 1 then
+    if jsonb_array_length(v_cands) = 1 and v_total + v_row.amount_minor > v_payment.amount_minor then
+      v_issue := coalesce(v_issue, 'REFUND_TOTAL_EXCEEDS_PAYMENT');
+      if v_row.status = 'requested' then
+        update public.payment_refunds set status = 'requires_reconciliation', failure_code = 'REFUND_TOTAL_EXCEEDS_PAYMENT'
+        where id = v_row.id;
+        v_changed := v_changed + 1;
+      end if;
+      -- Keep the candidate out of the import below: it may be this refund.
+      v_ambiguous := true;
+    elsif jsonb_array_length(v_cands) = 1 then
       update public.payment_refunds
       set provider_refund_id = v_cands -> 0 ->> 'id', status = 'succeeded', completed_at = now(),
           failure_code = null, last_checked_at = now()
       where id = v_row.id;
+      v_total := v_total + v_row.amount_minor;
       v_changed := v_changed + 1;
       select coalesce(jsonb_agg(e), '[]'::jsonb) into v_items
       from jsonb_array_elements(v_items) e where (e ->> 'id') <> (v_cands -> 0 ->> 'id');
@@ -3468,11 +3403,18 @@ begin
   end loop;
 
   -- 3. Refunds that exist only at the provider. Not while a lost answer is
-  -- ambiguous: one of them may be Nexora's own request.
+  -- ambiguous: one of them may be Nexora's own request. A refund that would
+  -- put the ledger above the paid amount is not recorded as confirmed; the
+  -- payment goes to review instead.
   if not v_ambiguous then
     for v_item in select e from jsonb_array_elements(v_items) e loop
       if (v_item ->> 'currency') <> v_payment.currency then
         v_issue := coalesce(v_issue, 'REFUND_CURRENCY_MISMATCH');
+        continue;
+      end if;
+      if not (v_item ->> 'voided')::boolean
+         and v_total + (v_item ->> 'amount_minor')::bigint > v_payment.amount_minor then
+        v_issue := coalesce(v_issue, 'REFUND_TOTAL_EXCEEDS_PAYMENT');
         continue;
       end if;
       insert into public.payment_refunds
@@ -3482,18 +3424,14 @@ begin
         (v_payment.id, v_payment.order_id, v_payment.provider, v_item ->> 'id', (v_item ->> 'amount_minor')::bigint,
          v_payment.currency, case when (v_item ->> 'voided')::boolean then 'voided' else 'succeeded' end, 'provider',
          now(), now());
+      if not (v_item ->> 'voided')::boolean then
+        v_total := v_total + (v_item ->> 'amount_minor')::bigint;
+      end if;
       v_changed := v_changed + 1;
     end loop;
   end if;
 
   -- 4. Totals must agree with the provider.
-  select coalesce(sum(r.amount_minor), 0) into v_total
-  from public.payment_refunds r
-  where r.payment_id = v_payment.id and r.status = 'succeeded';
-
-  if v_total > v_payment.amount_minor then
-    v_issue := coalesce(v_issue, 'REFUND_TOTAL_EXCEEDS_PAYMENT');
-  end if;
   if p_captured_minor is not null and p_captured_minor <> v_payment.amount_minor then
     v_issue := coalesce(v_issue, 'REFUND_BALANCE_MISMATCH');
   end if;
@@ -3508,6 +3446,12 @@ begin
       v_issue := coalesce(v_issue, 'REFUND_STATE_MISMATCH');
     end if;
   end if;
+
+  select exists (select 1 from public.payment_refunds r
+                 where r.payment_id = v_payment.id and r.status in ('requested', 'requires_reconciliation'))
+    into v_open;
+  v_ledger_review := v_payment.status = 'requires_review'
+    and (v_payment.failure_code like 'REFUND\_%' or v_payment.failure_code = 'PROVIDER_REFUND_VOIDED');
 
   -- 5. The payment (and its order) follow the ledger.
   if v_issue is not null then
@@ -3525,6 +3469,45 @@ begin
     else
       update public.payments set last_checked_at = now(), updated_at = now() where id = v_payment.id;
       v_new := v_payment.status;
+    end if;
+  elsif v_ledger_review then
+    -- Held in review for a refund-ledger reason. Only a mismatch that could
+    -- have been a timing gap at the provider (a refund not listed yet, a
+    -- balance or status not updated yet) is lifted automatically — and only
+    -- when this fresh, authoritative lookup agrees with the ledger on every
+    -- point, no refund is still open, and this is the checkout's own settled
+    -- payment. Voids, amount/currency differences, ambiguity and over-refunds
+    -- always stay for the admin. Never touches fulfilment or stock.
+    select exists (select 1 from public.payments o
+                   where o.checkout_session_id = v_payment.checkout_session_id and o.id <> v_payment.id
+                     and o.status in ('paid', 'partially_refunded', 'refunded'))
+      into v_settled_other;
+    v_new := case when v_total = 0 then 'paid'
+                  when v_total < v_payment.amount_minor then 'partially_refunded'
+                  else 'refunded' end;
+    if v_payment.failure_code in ('REFUND_MISSING_AT_PROVIDER', 'REFUND_BALANCE_MISMATCH', 'REFUND_STATE_MISMATCH')
+       and p_provider_status in ('paid', 'partially_refunded', 'refunded')
+       and not v_open and not v_settled_other
+       and (v_new <> 'paid' or v_payment.order_id is not null) then
+      update public.payments
+      set status = v_new, failure_code = null, failure_message = null, last_checked_at = now(), updated_at = now()
+      where id = v_payment.id;
+      if v_payment.order_id is not null then
+        update public.orders set payment_status = v_new, updated_at = now()
+        where id = v_payment.order_id;
+      end if;
+      -- Audit: the automatic lift is visible in the payment's timeline.
+      insert into public.payment_events (provider, provider_event_id, payment_id, event_type, signature_valid, outcome,
+                                         details, processed_at)
+      values (v_payment.provider, 'internal:' || gen_random_uuid()::text, v_payment.id, 'internal.refund_review_cleared',
+              true, 'processed', jsonb_build_object('reason', v_payment.failure_code, 'provider_state', p_provider_status),
+              now());
+    else
+      update public.payments set last_checked_at = now(), updated_at = now() where id = v_payment.id;
+      -- Report the standing reason, so a later "paid" lookup is not taken as
+      -- a resolution of a contradiction nobody looked at.
+      v_new := 'requires_review';
+      v_issue := v_payment.failure_code;
     end if;
   elsif p_provider_status in ('paid', 'partially_refunded', 'refunded') then
     v_new := case when v_total = 0 then 'paid'
@@ -3556,15 +3539,6 @@ begin
   else
     update public.payments set last_checked_at = now(), updated_at = now() where id = v_payment.id;
     v_new := v_payment.status;
-  end if;
-
-  -- A payment held in review for a refund-ledger reason stays there: report
-  -- that reason, so a later "paid" lookup is not taken as a resolution of a
-  -- contradiction nobody looked at. (The admin acknowledges it with a review
-  -- note; the payment's status itself is not changed by hand.)
-  if v_issue is null and v_new = 'requires_review'
-     and (v_payment.failure_code like 'REFUND\_%' or v_payment.failure_code = 'PROVIDER_REFUND_VOIDED') then
-    v_issue := v_payment.failure_code;
   end if;
 
   return query select v_new, v_issue, v_changed;

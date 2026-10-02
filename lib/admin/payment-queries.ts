@@ -592,7 +592,9 @@ function buildTimeline(d: AdminPaymentDetail): TimelineEntry[] {
   if (d.payment.paidAt) t.push({ at: d.payment.paidAt, kind: "verified", title: "Payment confirmed by provider lookup" });
   if (d.order?.fromThisPayment) t.push({ at: d.order.createdAt, kind: "nexora", title: `Order #${d.order.id.slice(0, 8)} created` });
   for (const e of d.events) {
-    if (e.kind === "internal") {
+    if (e.kind === "internal" && e.eventType === "internal.refund_review_cleared") {
+      t.push({ at: e.receivedAt, kind: "verified", title: "Provider's refund records match again — review lifted automatically", detail: e.evidence.map((x) => `${x.label}: ${x.value}`).join(" · ") || undefined });
+    } else if (e.kind === "internal") {
       t.push({ at: e.receivedAt, kind: "verified", title: "Provider lookup did not match this payment", detail: e.evidence.map((x) => `${x.label}: ${x.value}`).join(" · ") || undefined });
     } else {
       t.push({ at: e.receivedAt, kind: "event", title: `Provider event received: ${e.eventType}` });
