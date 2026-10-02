@@ -3648,15 +3648,13 @@ as
 revoke all on table public.admin_payments from public, anon, authenticated, service_role;
 grant select on public.admin_payments to authenticated;
 
--- Pre-existing order tables still carry Supabase's default TRUNCATE /
--- REFERENCES / TRIGGER (and, on PostgreSQL 17, MAINTAIN) privileges for the
--- API roles. Nothing uses them; remove them. Existing SELECT/UPDATE grants
--- (above) are unchanged.
-revoke truncate, references, trigger on public.orders, public.order_items from anon, authenticated, service_role;
-do $$
-begin
-  if current_setting('server_version_num')::int >= 170000 then
-    execute 'revoke maintain on public.orders, public.order_items from anon, authenticated, service_role';
-  end if;
-end;
-$$;
+-- Order tables: exact, history-independent privileges. Whatever an existing
+-- project accumulated (Supabase default grants, TRUNCATE/REFERENCES/TRIGGER/
+-- MAINTAIN, anon access), the final state is: customers/admin read through
+-- RLS, and only status/updated_at are updatable (admin-only by RLS). Orders
+-- are written exclusively by SECURITY DEFINER functions (owner rights), so
+-- service_role needs nothing here. REVOKE ALL also drops column grants, hence
+-- the column UPDATE grant comes last.
+revoke all on public.orders, public.order_items from anon, authenticated, service_role;
+grant select on public.orders, public.order_items to authenticated;
+grant update (status, updated_at) on public.orders to authenticated;
