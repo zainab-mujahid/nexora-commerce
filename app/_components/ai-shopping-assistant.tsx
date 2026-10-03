@@ -409,22 +409,15 @@ export function AiShoppingAssistant({
               {transcript.length === 0 && (
                 <li className="flex flex-col gap-3 text-sm">
                   <p className="text-muted">
-                    Describe what you&apos;re shopping for and I&apos;ll suggest matching products
-                    from the catalog. Add a budget or category to narrow it down, then follow
-                    up — for example, &ldquo;something cheaper&rdquo;.
+                    Tell me what you&apos;re looking for, and I&apos;ll find matching products.
                   </p>
-                  <div className="flex flex-col gap-1.5">
-                    <p className="text-xs font-medium text-subtle">For example</p>
-                    {/* Plain quoted text, not boxes: these are examples to type,
-                        not controls, and must not look clickable. */}
-                    <ul className="flex flex-col gap-1 border-l-2 border-border pl-3">
-                      {["A laptop for work", "Comfortable shoes under $80"].map((example) => (
-                        <li key={example} className="italic text-muted">
-                          &ldquo;{example}&rdquo;
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                  {/* Plain quoted text, not boxes: these are examples to type,
+                      not controls, and must not look clickable. */}
+                  <p className="text-muted">
+                    <span className="text-xs font-medium text-subtle">Try:</span>{" "}
+                    <span className="italic">&ldquo;A laptop for work&rdquo;</span> ·{" "}
+                    <span className="italic">&ldquo;Shoes under $80&rdquo;</span>
+                  </p>
                 </li>
               )}
 
