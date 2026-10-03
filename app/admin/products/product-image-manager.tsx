@@ -6,127 +6,136 @@ import { useState, type ChangeEvent } from "react";
 import { ProductImageFrame } from "@/app/_components/product-image-frame";
 import {
   confirmProductImageReplace,
-  confirmProductImageUpload,
   deleteProductImage,
   moveProductImage,
   requestProductImageReplaceUploadUrl,
-  requestProductImageUploadUrl,
   setProductImagePrimary,
   updateProductImageAltText,
   type ProductImageActionResult,
 } from "@/lib/admin/product-images";
-import {
-  PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES,
-  PRODUCT_IMAGE_MAX_SIZE_BYTES,
-} from "@/lib/admin/schemas";
+import type { ProductImageStorage } from "@/lib/admin/product-image-storage";
+import { PRODUCT_IMAGE_MAX_PER_PRODUCT } from "@/lib/admin/schemas";
 import type { ProductImage } from "@/lib/catalog/types";
 
-const ALLOWED_CONTENT_TYPES: readonly string[] = PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES;
-const ACCEPT = PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES.join(",");
-const MAX_SIZE_LABEL = `${Math.round(PRODUCT_IMAGE_MAX_SIZE_BYTES / (1024 * 1024))}MB`;
+import { IMAGE_ACCEPT, IMAGE_MAX_SIZE_LABEL, putToS3, uploadProductImage, validateImageFile } from "./product-image-upload";
 
-function validateFile(file: File): string | null {
-  if (!ALLOWED_CONTENT_TYPES.includes(file.type)) {
-    return "Only JPEG, PNG, WEBP, and GIF images are allowed.";
-  }
-  if (file.size > PRODUCT_IMAGE_MAX_SIZE_BYTES) {
-    return `File is too large. Maximum size is ${MAX_SIZE_LABEL}.`;
-  }
-  return null;
-}
+type UploadLine = { name: string; status: "waiting" | "uploading" | "done" | "failed"; error?: string };
 
-async function putToS3(uploadUrl: string, file: File): Promise<string | null> {
-  const response = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": file.type },
-    body: file,
-  });
-  return response.ok ? null : "Upload to S3 failed. Please try again.";
-}
-
-// Step 11: full image management for one product — add, set primary, edit
-// alt text, reorder, replace, delete. Rendered on the edit page only (a
-// product id is required for the S3 key prefix).
+// Full image management for one product — add (several at once), set
+// primary, edit alt text, reorder, replace, delete. Rendered on the edit
+// page; a new product uploads its first images from the create form.
 export function ProductImageManager({
   productId,
   images,
+  storage,
 }: {
   productId: string;
   images: ProductImage[];
+  // Server-side S3 check of the stored keys (lib/admin/product-image-storage.ts).
+  storage: ProductImageStorage;
 }) {
   const router = useRouter();
   const [addPending, setAddPending] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [lines, setLines] = useState<UploadLine[]>([]);
+  const remaining = Math.max(0, PRODUCT_IMAGE_MAX_PER_PRODUCT - images.length);
 
-  async function handleAddFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = ""; // allow re-selecting the same file for another upload
-    if (!file) return;
+  async function handleAddFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = ""; // allow re-selecting the same files
+    if (files.length === 0) return;
 
     setAddError(null);
-    const clientError = validateFile(file);
-    if (clientError) {
-      setAddError(clientError);
+    if (files.length > remaining) {
+      setAddError(
+        remaining === 0
+          ? `This product already has ${PRODUCT_IMAGE_MAX_PER_PRODUCT} images. Delete one to add another.`
+          : `You can add ${remaining} more image${remaining === 1 ? "" : "s"} to this product.`,
+      );
       return;
     }
 
     setAddPending(true);
-    try {
-      const presigned = await requestProductImageUploadUrl({
-        productId,
-        filename: file.name,
-        contentType: file.type,
-        sizeBytes: file.size,
-      });
-      if ("error" in presigned) {
-        setAddError(presigned.error);
-        return;
+    setLines(files.map((file) => ({ name: file.name, status: "waiting" })));
+    let anyDone = false;
+    // One at a time: each file gets its own presigned URL and confirmation,
+    // and a failure never affects the files that already went through.
+    for (const [index, file] of files.entries()) {
+      setLines((current) => current.map((line, i) => (i === index ? { ...line, status: "uploading" } : line)));
+      let result: { imageId: string } | { error: string };
+      try {
+        result = await uploadProductImage(productId, file);
+      } catch (error) {
+        console.error("ProductImageManager: upload failed", error);
+        result = { error: "Something went wrong. Please try again." };
       }
-
-      const uploadError = await putToS3(presigned.uploadUrl, file);
-      if (uploadError) {
-        setAddError(uploadError);
-        return;
-      }
-
-      const confirmed = await confirmProductImageUpload({
-        productId,
-        key: presigned.key,
-        contentType: file.type,
-      });
-      if ("error" in confirmed) {
-        setAddError(confirmed.error);
-        return;
-      }
-
-      router.refresh();
-    } catch (error) {
-      console.error("ProductImageManager: add failed", error);
-      setAddError("Something went wrong. Please try again.");
-    } finally {
-      setAddPending(false);
+      if ("imageId" in result) anyDone = true;
+      const outcome = result;
+      setLines((current) =>
+        current.map((line, i) =>
+          i !== index ? line : "error" in outcome ? { ...line, status: "failed", error: outcome.error } : { ...line, status: "done" },
+        ),
+      );
     }
+    setAddPending(false);
+    if (anyDone) router.refresh();
   }
+
+  const missingCount = images.filter((image) => storage.missingIds.includes(image.id)).length;
 
   return (
     <div className="card flex flex-col gap-5 p-5 sm:p-6">
+      {!storage.reachable && (
+        <p role="alert" className="rounded-md border border-warning/40 bg-fill/40 px-3 py-2 text-xs leading-relaxed">
+          Image storage isn&apos;t reachable from this server{storage.problem ? ` (${storage.problem})` : ""}. Stored images
+          can&apos;t be shown, uploaded or deleted until the S3 bucket and AWS credentials are fixed.
+        </p>
+      )}
+      {storage.reachable && missingCount > 0 && (
+        <p role="status" className="rounded-md border border-warning/40 bg-fill/40 px-3 py-2 text-xs leading-relaxed">
+          {missingCount === 1 ? "1 image file is" : `${missingCount} image files are`} missing from storage. Customers see a
+          placeholder instead — replace or delete {missingCount === 1 ? "it" : "them"} below.
+        </p>
+      )}
+
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="product-image" className="text-sm font-medium">
-          Add image
-        </label>
+        <div className="flex items-baseline justify-between gap-2">
+          <label htmlFor="product-image" className="text-sm font-medium">
+            Add images
+          </label>
+          <span className="text-xs text-muted tabular-nums">
+            {images.length} of {PRODUCT_IMAGE_MAX_PER_PRODUCT}
+          </span>
+        </div>
         <input
           id="product-image"
           type="file"
-          accept={ACCEPT}
-          disabled={addPending}
-          onChange={handleAddFile}
+          accept={IMAGE_ACCEPT}
+          multiple
+          disabled={addPending || remaining === 0}
+          onChange={handleAddFiles}
           className="text-sm file:mr-3 file:h-8 file:cursor-pointer file:rounded-md file:border-0 file:bg-foreground file:px-3 file:text-sm file:font-medium file:text-background disabled:opacity-60"
         />
         <p className="text-xs text-muted">
-          JPEG, PNG, WEBP, or GIF, up to {MAX_SIZE_LABEL}.
+          JPEG, PNG, WEBP, or GIF, up to {IMAGE_MAX_SIZE_LABEL} each. Most products look best with 3–4 images.
         </p>
-        {addPending && <p className="text-sm text-muted">Uploading…</p>}
         {addError && <p className="text-sm text-red-600 dark:text-red-400">{addError}</p>}
+        {lines.length > 0 && (
+          <ul aria-live="polite" className="flex flex-col gap-1 text-xs">
+            {lines.map((line, i) => (
+              <li key={i} className="flex flex-wrap items-baseline gap-x-2">
+                <span className="max-w-[16rem] truncate">{line.name}</span>
+                <span
+                  className={
+                    line.status === "failed" ? "text-red-600 dark:text-red-400" : line.status === "done" ? "text-success" : "text-muted"
+                  }
+                >
+                  {line.status === "waiting" ? "Waiting" : line.status === "uploading" ? "Uploading…" : line.status === "done" ? "Uploaded" : line.error}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {images.length === 0 ? (
@@ -137,6 +146,7 @@ export function ProductImageManager({
             <ProductImageRow
               key={image.id}
               image={image}
+              missing={storage.missingIds.includes(image.id)}
               isFirst={index === 0}
               isLast={index === images.length - 1}
               onChanged={() => router.refresh()}
@@ -152,11 +162,13 @@ type PendingKind = "primary" | "move" | "delete" | "replace" | "alt";
 
 function ProductImageRow({
   image,
+  missing,
   isFirst,
   isLast,
   onChanged,
 }: {
   image: ProductImage;
+  missing: boolean;
   isFirst: boolean;
   isLast: boolean;
   onChanged: () => void;
@@ -209,7 +221,7 @@ function ProductImageRow({
     event.target.value = "";
     if (!file) return;
 
-    const clientError = validateFile(file);
+    const clientError = validateImageFile(file);
     if (clientError) {
       setError(clientError);
       return;
@@ -312,7 +324,7 @@ function ProductImageRow({
             Replace
             <input
               type="file"
-              accept={ACCEPT}
+              accept={IMAGE_ACCEPT}
               disabled={busy}
               onChange={handleReplace}
               className="hidden"
@@ -328,6 +340,11 @@ function ProductImageRow({
           </button>
         </div>
 
+        {missing && (
+          <p className="text-xs text-red-600 dark:text-red-400">
+            File not found in storage — this record points at an object that no longer exists. Replace or delete it.
+          </p>
+        )}
         {pending && <p className="text-xs text-muted">Working…</p>}
         {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       </div>

@@ -55,8 +55,27 @@ export function ProductImageGallery({
       </div>
 
       {images.length > 1 && (
-        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 py-1">
-          {images.map((image) => {
+        // Tab reaches the thumbnails; Left/Right (and Home/End) move the
+        // selection like a toolbar, Enter/Space select the focused one.
+        <div
+          role="group"
+          aria-label="Product images"
+          onKeyDown={(event) => {
+            const index = images.findIndex((image) => image.id === selected.id);
+            const target =
+              event.key === "ArrowRight" ? Math.min(index + 1, images.length - 1)
+              : event.key === "ArrowLeft" ? Math.max(index - 1, 0)
+              : event.key === "Home" ? 0
+              : event.key === "End" ? images.length - 1
+              : -1;
+            if (target < 0) return;
+            event.preventDefault();
+            setSelectedId(images[target].id);
+            event.currentTarget.querySelectorAll("button")[target]?.focus();
+          }}
+          className="-mx-1 flex gap-2 overflow-x-auto px-1 py-1"
+        >
+          {images.map((image, index) => {
             const isSelected = image.id === selected.id;
             return (
               <button
@@ -64,7 +83,7 @@ export function ProductImageGallery({
                 type="button"
                 onClick={() => setSelectedId(image.id)}
                 aria-pressed={isSelected}
-                aria-label={image.alt_text || alt}
+                aria-label={`${image.alt_text || alt} — image ${index + 1} of ${images.length}`}
                 className={`relative size-16 shrink-0 rounded-lg p-0.5 transition-opacity sm:size-20 ${
                   isSelected ? "" : "opacity-75 hover:opacity-100"
                 }`}

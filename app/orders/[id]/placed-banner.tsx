@@ -1,28 +1,45 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
-// Thank-you banner for the visit right after checkout. `?placed=1` only
-// decides WHETHER to greet (it comes from our own redirect after
-// verification); `paid` comes from the order row in the database, so a
-// hand-typed ?placed=1 can never make an unpaid order look paid.
-//
-// useSearchParams() reads the client router's current URL, which is what the
-// address bar shows after the server-side redirect's soft navigation.
-export function PlacedBanner({ paid }: { paid: boolean }) {
+// One-time "payment received" confirmation for the visit right after
+// checkout. Two independent conditions:
+//   - `confirmed` comes from the DATABASE (server-rendered): the order's own
+//     payment is 'paid' and was verified moments ago — failed, pending,
+//     cancelled, expired, refunded, partially refunded and under-review
+//     orders can never get it, and neither can an old paid order;
+//   - `?placed=1` (set only by our own redirect after verification) decides
+//     whether this visit is the one to greet.
+// The parameter is then removed from the address bar, so a refresh, the back
+// button or a later visit shows the ordinary Paid status instead.
+export function PlacedBanner({ confirmed }: { confirmed: boolean }) {
   const searchParams = useSearchParams();
-  if (searchParams.get("placed") !== "1" || !paid) return null;
+  // Captured once: removing the parameter below must not hide the banner.
+  const [show] = useState(() => confirmed && searchParams.get("placed") === "1");
+
+  useEffect(() => {
+    if (searchParams.get("placed") !== "1") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("placed");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [searchParams]);
+
+  if (!show) return null;
 
   return (
-    <p className="flex gap-2.5 rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-foreground">
-      <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 size-4 shrink-0 text-success">
-        <circle cx="10" cy="10" r="7.5" />
-        <path d="m6.8 10.2 2.2 2.2 4.2-4.6" />
-      </svg>
-      <span>
-        <strong className="font-semibold">Payment confirmed — thank you for your order.</strong> We&apos;ll get it ready and
-        you can follow its status here.
+    <div role="status" className="flex items-start gap-3.5 rounded-xl border border-success/30 bg-success/10 px-4 py-4 sm:px-5">
+      <span aria-hidden="true" className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-5">
+          <path d="m5.5 10.5 3 3 6-7" />
+        </svg>
       </span>
-    </p>
+      <span className="flex flex-col gap-0.5">
+        <strong className="text-base font-semibold tracking-tight">Payment received</strong>
+        <span className="text-sm text-muted">
+          Thank you for your order. Your payment has been confirmed successfully — you can follow your order&apos;s progress here.
+        </span>
+      </span>
+    </div>
   );
 }

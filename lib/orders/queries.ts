@@ -203,6 +203,29 @@ export const getOrderRefundSummary = cache(async (orderId: string): Promise<Orde
   return { refundedMinor: String(row.refunded_minor), paidMinor: String(row.paid_minor), currency: String(row.currency) };
 });
 
+// How long after server-side verification a payment counts as "just paid".
+const PAYMENT_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
+
+// True only when the order's own payment is currently 'paid' AND the
+// server-side verification marked it paid (payments.paid_at) within the
+// confirmation window. Lets the order page greet a just-completed payment
+// once, without trusting anything from the URL; any other payment state, or
+// an older payment, is false.
+export const isOrderPaymentJustConfirmed = cache(async (orderId: string): Promise<boolean> => {
+  await requireUser();
+  if (!orderIdSchema.safeParse(orderId).success) return false;
+  const supabase = await createClient();
+  const since = new Date(Date.now() - PAYMENT_CONFIRMATION_WINDOW_MS).toISOString();
+  const { data, error } = await supabase
+    .from("payments")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("status", "paid")
+    .gte("paid_at", since)
+    .limit(1);
+  return !error && (data ?? []).length === 1;
+});
+
 // Safe display of how an order was paid (card brand + last four digits),
 // from the customer's own payment row (RLS payments_select_own_or_admin).
 // null for orders without an online payment.

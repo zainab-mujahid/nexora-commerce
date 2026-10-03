@@ -85,6 +85,9 @@ export async function createProduct(
   await ensureProductEmbeddingCurrent(created.id);
 
   revalidatePath("/", "layout");
+  // The new-product form uploads its selected images next (the S3 key
+  // prefix needs this id) and then opens the product's edit page itself.
+  if (formData.get("withImages") === "1") return { createdId: created.id };
   redirect("/admin/products");
 }
 

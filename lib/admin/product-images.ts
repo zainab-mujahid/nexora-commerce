@@ -14,6 +14,7 @@ import {
   confirmProductImageReplaceSchema,
   confirmProductImageUploadSchema,
   moveProductImageSchema,
+  PRODUCT_IMAGE_MAX_PER_PRODUCT,
   PRODUCT_IMAGE_MAX_SIZE_BYTES,
   productImageIdSchema,
   requestProductImageReplaceUploadSchema,
@@ -144,6 +145,20 @@ export async function requestProductImageUploadUrl(
     return { error: "Product not found." };
   }
 
+  // Checked before anything is presigned, so a full gallery never gets an
+  // upload URL (and so never an orphaned S3 object).
+  const { count, error: countError } = await supabase
+    .from("product_images")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", productId);
+  if (countError) {
+    console.error(`requestProductImageUploadUrl: failed to count images for product "${productId}"`, countError);
+    return { error: "Something went wrong. Please try again." };
+  }
+  if ((count ?? 0) >= PRODUCT_IMAGE_MAX_PER_PRODUCT) {
+    return { error: `A product can have at most ${PRODUCT_IMAGE_MAX_PER_PRODUCT} images. Delete one to add another.` };
+  }
+
   const key = `products/${productId}/${randomUUID()}-${toSafeFilename(filename)}`;
   const uploadUrl = await createPresignedUploadUrl(key, contentType);
 
@@ -151,7 +166,7 @@ export async function requestProductImageUploadUrl(
 }
 
 export type ConfirmProductImageUploadResult =
-  | { success: true }
+  | { success: true; imageId: string }
   | { error: string };
 
 // Step 10: called once the browser's direct-to-S3 PUT succeeds. Re-verifies
@@ -194,33 +209,96 @@ export async function confirmProductImageUpload(
 
   const supabase = await createClient();
 
+  // A repeated confirmation of the same upload (double submit, retry after a
+  // lost response) returns the row it already created.
+  const existingRow = await findImageByKey(supabase, productId, key);
+  if (existingRow) return { success: true, imageId: existingRow };
+
   // Normalizing first (self-heals any pre-existing rows still stuck at the
   // sort_order=0 default) also gives the exact next position: the
   // normalized list is 0..n-1, so a product with images at 0, 1, 2 gets its
   // new image at 3.
   const existingImages = await normalizeProductImageOrder(supabase, productId);
-  const nextSortOrder = existingImages.length;
+  if (existingImages.length >= PRODUCT_IMAGE_MAX_PER_PRODUCT) {
+    await deleteRejectedUpload(key);
+    return { error: `A product can have at most ${PRODUCT_IMAGE_MAX_PER_PRODUCT} images. Delete one to add another.` };
+  }
 
-  const { error } = await supabase.from("product_images").insert({
+  // A product's first image becomes its primary image, so the storefront
+  // never has to guess. At most one primary per product is enforced by
+  // product_images_one_primary_idx; if a concurrent upload claimed it first,
+  // this one is simply added as a non-primary image.
+  const hasPrimary = await productHasPrimaryImage(supabase, productId);
+  const row = {
     product_id: productId,
     s3_key: key,
     content_type: metadata.contentType ?? contentType,
     size_bytes: metadata.contentLength ?? null,
-    sort_order: nextSortOrder,
-  });
+    sort_order: existingImages.length,
+  };
+  let inserted = await supabase.from("product_images").insert({ ...row, is_primary: !hasPrimary }).select("id").single();
+  if (inserted.error?.code === UNIQUE_VIOLATION && !hasPrimary) {
+    const again = await findImageByKey(supabase, productId, key);
+    if (again) return { success: true, imageId: again };
+    inserted = await supabase.from("product_images").insert({ ...row, is_primary: false }).select("id").single();
+  }
 
-  if (error) {
+  if (inserted.error) {
+    if (inserted.error.code === UNIQUE_VIOLATION) {
+      const again = await findImageByKey(supabase, productId, key);
+      if (again) return { success: true, imageId: again };
+    }
     console.error(
       `confirmProductImageUpload: failed to insert product_images row for product "${productId}"`,
-      error,
+      inserted.error,
     );
+    // No record points at the object, so remove it rather than leave an
+    // orphan in the bucket.
+    await deleteRejectedUpload(key);
     return {
-      error: "Upload succeeded, but saving the image record failed. Please try again.",
+      error: "The image uploaded, but saving its record failed, so it was removed. Please try again.",
     };
   }
 
   revalidatePath("/", "layout");
-  return { success: true };
+  return { success: true, imageId: inserted.data.id };
+}
+
+// Postgres unique_violation (s3_key is unique; at most one primary per product).
+const UNIQUE_VIOLATION = "23505";
+
+async function findImageByKey(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  productId: string,
+  key: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("product_images")
+    .select("id")
+    .eq("product_id", productId)
+    .eq("s3_key", key)
+    .maybeSingle();
+  if (error) {
+    console.error(`findImageByKey: lookup failed for product "${productId}"`, error);
+    throw new Error("Failed to look up product image");
+  }
+  return data?.id ?? null;
+}
+
+async function productHasPrimaryImage(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  productId: string,
+): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("product_images")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", productId)
+    .eq("is_primary", true);
+  if (error) {
+    console.error(`productHasPrimaryImage: lookup failed for product "${productId}"`, error);
+    throw new Error("Failed to look up product images");
+  }
+  return (count ?? 0) > 0;
 }
 
 // ---- Step 11: management ----

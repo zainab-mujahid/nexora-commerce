@@ -93,6 +93,9 @@ export type ProductFormState =
         categoryId?: string[];
       };
       message?: string;
+      // Set by createProduct when the browser still has images to upload
+      // for the new product (it needs the id for the S3 key prefix).
+      createdId?: string;
     }
   | undefined;
 
@@ -108,6 +111,10 @@ export const PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES = [
 ] as const;
 
 export const PRODUCT_IMAGE_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+// Images per product. A catalog normally uses 3–4; the cap only keeps a
+// gallery (and its S3 objects) bounded. Enforced by the upload actions.
+export const PRODUCT_IMAGE_MAX_PER_PRODUCT = 8;
 
 export const requestProductImageUploadSchema = z.object({
   productId: z.uuid(),

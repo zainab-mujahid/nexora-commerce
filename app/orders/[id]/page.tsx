@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth/dal";
 import { orderStatusBadgeClass } from "@/app/_components/order-status-badge";
 import { formatPrice } from "@/lib/catalog/format";
 import { TestModeBadge } from "@/app/_components/test-mode-badge";
-import { getOrderById, getOrderPaymentMethod, getOrderRefundSummary } from "@/lib/orders/queries";
+import { getOrderById, getOrderPaymentMethod, getOrderRefundSummary, isOrderPaymentJustConfirmed } from "@/lib/orders/queries";
 import { minorToUsdDecimal } from "@/lib/payments/money";
 import { getPaymentAvailability } from "@/lib/payments/presentation";
 
@@ -28,6 +28,9 @@ export default async function OrderDetailPage({
 
   const address = order.shipping_address;
   const paymentMethod = order.payment_status === "not_collected" ? null : await getOrderPaymentMethod(order.id);
+  // "Payment received" only for an order whose own payment the server
+  // verified as paid moments ago (database state, never the URL).
+  const justPaid = order.payment_status === "paid" && (await isOrderPaymentJustConfirmed(order.id));
   // Verified amounts only (refunds the provider confirmed); never timings.
   const refunds =
     order.payment_status === "partially_refunded" || order.payment_status === "refunded" ? await getOrderRefundSummary(order.id) : null;
@@ -74,7 +77,7 @@ export default async function OrderDetailPage({
           </span>
         </div>
         <Suspense fallback={null}>
-          <PlacedBanner paid={order.payment_status === "paid"} />
+          <PlacedBanner confirmed={justPaid} />
         </Suspense>
       </div>
 
