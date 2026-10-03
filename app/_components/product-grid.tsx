@@ -18,8 +18,15 @@ export function ProductGrid({
   products: ProductListItem[];
   fourUp?: boolean;
 }) {
+  // The grid reveals its cards once, when it first scrolls into view
+  // (Stagger: whileInView, once). Cards that mount later into an already
+  // revealed grid never receive that reveal and stay invisible — which is
+  // what happened when the product set changed in place (AI assistant
+  // answers, client-side category/search changes on the listing). Keying the
+  // container by the product ids gives every distinct product set a fresh
+  // grid that reveals all of its cards; an unchanged set keeps its grid.
   return (
-    <Stagger className={fourUp ? GRID_CLASS_FOUR_UP : GRID_CLASS}>
+    <Stagger key={products.map((product) => product.id).join(",")} className={fourUp ? GRID_CLASS_FOUR_UP : GRID_CLASS}>
       {products.map((product) => (
         <StaggerItem key={product.id} className="h-full">
           <ProductCard product={product} />
