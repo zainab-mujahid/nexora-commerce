@@ -94,10 +94,13 @@ const SECTIONS: LegalSection[] = [
     title: "Orders",
     body: (
       <p>
-        Placing an order records your request to purchase the selected products for delivery to the shipping address
-        you chose. Orders are subject to availability, and we may cancel an order — for example, if a product becomes
-        unavailable or an error in pricing or product information is found — while it is still Pending or Processing.
-        Online payment isn&apos;t currently active in checkout, so placing an order doesn&apos;t charge you.
+        Checking out records your request to purchase the selected products for delivery to the shipping address you
+        chose. Payment is made through our payment provider, Safepay, and an order is created only after the payment
+        has been confirmed, as described in our <Link href="/payment-policy">Payment Policy</Link>. Payments currently
+        run in Safepay&apos;s test mode, where no real money is charged. Orders are subject to availability, and we may
+        cancel an order — for example, if a product becomes unavailable or an error in pricing or product information is
+        found — while it is still Pending or Processing. Refunds are handled as described in our Payment Policy and{" "}
+        <Link href="/returns">Return &amp; Refund Policy</Link>.
       </p>
     ),
   },
@@ -130,8 +133,7 @@ const SECTIONS: LegalSection[] = [
     body: (
       <p>
         Nexora relies on third-party providers for parts of the service, such as account sign-in, data storage, product
-        images and AI processing, and will rely on a payment provider for online payments once enabled. These providers
-        operate under their own terms. See our <Link href="/privacy">Privacy Policy</Link> for details.
+        images, AI processing and payment processing (Safepay). These providers operate under their own terms. See our <Link href="/privacy">Privacy Policy</Link> for details.
       </p>
     ),
   },

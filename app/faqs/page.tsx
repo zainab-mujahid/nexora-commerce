@@ -168,15 +168,32 @@ const GROUPS: { id: string; title: string; items: FaqItem[] }[] = [
         answer: (
           <>
             <p>
-              Go to checkout from your cart, choose a saved shipping address, review your items and place the order.
-              Each order then shows a status in your order history: <strong>Pending</strong>,{" "}
+              Go to checkout from your cart, choose a saved shipping address and continue to secure payment. You pay on
+              the checkout page of our payment provider, Safepay, and your order is created once Nexora has confirmed
+              the payment. Each order then shows a status in your order history: <strong>Pending</strong>,{" "}
               <strong>Processing</strong>, <strong>Shipped</strong>, <strong>Delivered</strong> or{" "}
               <strong>Cancelled</strong>.
             </p>
             <p>
-              Online payment isn&apos;t active in Nexora checkout yet, so placing an order doesn&apos;t charge you — see
-              the <Link href="/payment-policy">Payment Policy</Link>. Our <Link href="/shipping">Shipping Policy</Link>{" "}
-              explains how orders are handled.
+              Payments currently run in Safepay&apos;s test mode, shown by a &ldquo;Test mode · No real charge&rdquo;
+              badge, so no real money is charged. See the <Link href="/payment-policy">Payment Policy</Link> for details,
+              and our <Link href="/shipping">Shipping Policy</Link> for how orders are handled.
+            </p>
+          </>
+        ),
+      },
+      {
+        question: "What happens if my payment is still processing, fails or is cancelled?",
+        answer: (
+          <>
+            <p>
+              While a payment is being confirmed, the payment page shows that it&apos;s being verified — please don&apos;t
+              pay again. If a payment is declined or cancelled, or your reservation ends without a confirmed payment, no
+              order is created and your cart stays as it was, so you can try again.
+            </p>
+            <p>
+              Occasionally a payment needs a manual check and is shown as under review; we&apos;ll follow up with you.
+              See the <Link href="/payment-policy">Payment Policy</Link> for more.
             </p>
           </>
         ),
@@ -185,8 +202,10 @@ const GROUPS: { id: string; title: string; items: FaqItem[] }[] = [
         question: "Can I return a product or request a refund?",
         answer: (
           <p>
-            Returns and refunds are handled by our support team rather than an online form. Our{" "}
-            <Link href="/returns">Return &amp; Refund Policy</Link> explains how to reach us and what to include.
+            Returns are handled by our support team rather than an online form. Refunds aren&apos;t automatic: where a
+            refund is appropriate, we issue it through Safepay — in full or in part — and your order shows it as
+            Partially refunded or Refunded once it&apos;s confirmed. Our <Link href="/returns">Return &amp; Refund
+            Policy</Link> explains how to reach us and what to include.
           </p>
         ),
       },

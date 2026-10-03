@@ -7,7 +7,7 @@ import { POLICIES_UPDATED, SUPPORT_EMAIL } from "@/app/_components/support-conta
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description:
-    "How Nexora Commerce collects, uses and protects information when you shop, use your account or the AI shopping assistant.",
+    "How Nexora Commerce collects, uses and protects information when you shop, pay, use your account or the AI shopping assistant.",
 };
 
 const SECTIONS: LegalSection[] = [
@@ -27,6 +27,15 @@ const SECTIONS: LegalSection[] = [
           When you place an order we record the products, quantities and prices, the order total, its status (such as
           Pending, Processing, Shipped, Delivered or Cancelled) and a copy of the shipping address used — so your order
           history stays accurate even if you later change that address.
+        </p>
+        <h3>Payment information</h3>
+        <p>
+          Payments are processed by our payment provider, Safepay. You enter your card details on Safepay&apos;s checkout
+          page, so Nexora never receives or stores your full card number. Nexora sends Safepay only what it needs to
+          process the payment — the amount, the currency and an order reference — not your name, address or the
+          products you bought. From Safepay, Nexora records the payment&apos;s status and amounts, any refunds, and
+          limited details that help you recognize the payment, such as the card brand and last four digits. Information
+          you give Safepay directly is handled under Safepay&apos;s own terms and privacy practices.
         </p>
         <h3>Account security information</h3>
         <p>
@@ -63,6 +72,7 @@ const SECTIONS: LegalSection[] = [
           <li>create, maintain and secure your account;</li>
           <li>operate shopping features such as search, your cart and your wishlist;</li>
           <li>record your orders and show them, with their status, in your order history;</li>
+          <li>process payments, confirm them with our payment provider and handle refunds;</li>
           <li>provide AI-assisted product discovery when you use the shopping assistant;</li>
           <li>respond to questions you send to our support team;</li>
           <li>protect the service and its users, for example by limiting excessive or automated requests.</li>
@@ -93,6 +103,9 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Upstash</strong> — short-term storage of recent shopping-assistant conversation context.
+          </li>
+          <li>
+            <strong>Safepay</strong> — payment processing on its secure checkout page, payment confirmation and refunds.
           </li>
         </ul>
         <p>
@@ -193,7 +206,8 @@ const SECTIONS: LegalSection[] = [
     body: (
       <p>
         We keep account information, saved addresses, cart and wishlist contents for as long as your account is active
-        or until you remove them. Order records are kept so your order history remains complete. Shopping-assistant
+        or until you remove them. Order, payment and refund records are kept so your order history and payment records
+        remain complete and accurate. Shopping-assistant
         conversation context is temporary and expires automatically, as described in section 5.
       </p>
     ),

@@ -7,16 +7,14 @@ import { POLICIES_UPDATED, SUPPORT_EMAIL } from "@/app/_components/support-conta
 export const metadata: Metadata = {
   title: "Payment Policy",
   description:
-    "Pricing, checkout and payments at Nexora Commerce, including our selected payment provider, PayFast Pakistan, and the payment methods it supports.",
+    "How pricing, checkout, payment confirmation and refunds work at Nexora Commerce, with payments processed through Safepay.",
 };
 
-// PayFast Pakistan is Nexora's selected payment provider, but it is not yet
-// integrated into checkout (no payment step exists in the code). This page
-// keeps "supported by PayFast" and "active in Nexora checkout" clearly apart
-// and never implies that a charge happens today.
-const CARD_NETWORKS = ["Visa", "Mastercard", "UnionPay International", "PayPak"] as const;
-const OTHER_CHANNELS = ["Bank Account", "Mobile Wallet", "Raast"] as const;
-
+// Mirrors the implemented flow: payment first (Safepay hosted checkout), the
+// order is created only after Nexora verifies the payment server-side. The
+// integration currently runs in Safepay's sandbox, so nothing here presents
+// it as live commercial payment processing. No refund window or processing
+// time is stated — neither is defined by the implementation.
 const SECTIONS: LegalSection[] = [
   {
     id: "payment-status",
@@ -25,13 +23,14 @@ const SECTIONS: LegalSection[] = [
       <>
         <div className="info-callout card flex flex-col gap-2 p-5">
           <p>
-            <strong>Online payment isn&apos;t active in Nexora checkout yet.</strong> Placing an order records it with
-            the products, prices and shipping address shown at checkout, but no payment is requested or charged.
+            <strong>Nexora&apos;s payments currently run in Safepay&apos;s test (sandbox) environment.</strong> While test
+            mode is active, payment pages show a &ldquo;Test mode · No real charge&rdquo; badge, and payments are test
+            transactions — no real money is charged.
           </p>
         </div>
         <p>
-          Nexora has selected <strong>PayFast Pakistan</strong> as its payment provider. This policy describes how
-          payments will work through PayFast once it is enabled in checkout, and how orders are handled until then.
+          Online payment at Nexora is processed by <strong>Safepay</strong>, our payment provider. This policy describes
+          how checkout, payment confirmation and refunds work.
         </p>
       </>
     ),
@@ -41,9 +40,9 @@ const SECTIONS: LegalSection[] = [
     title: "Pricing",
     body: (
       <p>
-        Prices are shown on each product page and in your cart and checkout. Prices can change at any time, but an order
-        records the prices shown when it was placed. Shipping charges and taxes aren&apos;t currently calculated in
-        checkout — the order total is the product subtotal.
+        Prices are shown in US dollars (USD) on each product page and in your cart and checkout. Prices can change at any
+        time, but an order records the prices shown when you checked out. Shipping charges and taxes aren&apos;t currently
+        calculated in checkout — the order total is the product subtotal.
       </p>
     ),
   },
@@ -51,61 +50,71 @@ const SECTIONS: LegalSection[] = [
     id: "checkout",
     title: "Checkout",
     body: (
-      <p>
-        At checkout you review the items in your cart, choose a saved shipping address and place your order. Product
-        availability is checked again when the order is placed. When online payment is enabled, a payment step through
-        PayFast will be part of this flow, and an order will only be treated as paid once the payment has been
-        successfully completed.
-      </p>
-    ),
-  },
-  {
-    id: "accepted-payment-methods",
-    title: "Accepted Payment Methods",
-    body: (
       <>
         <p>
-          The following payment methods are <strong>supported by our selected payment provider, PayFast</strong>. They are
-          expected to become available in Nexora once PayFast is enabled in checkout; none are active in Nexora checkout
-          today.
+          At checkout you review the items in your cart, choose a saved shipping address and continue to secure payment.
+          Product availability is checked again at this point, and your items are reserved for a limited time while you
+          pay — the payment page shows how long the reservation lasts.
         </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="card flex flex-col gap-3 p-5">
-            <h3>Card networks</h3>
-            <ul className="list-none pl-0">
-              {CARD_NETWORKS.map((name) => (
-                <li key={name} className="flex items-center gap-2.5">
-                  <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-accent" />
-                  {name}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="card flex flex-col gap-3 p-5">
-            <h3>Other payment channels</h3>
-            <ul className="list-none pl-0">
-              {OTHER_CHANNELS.map((name) => (
-                <li key={name} className="flex items-center gap-2.5">
-                  <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-accent" />
-                  {name}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
         <p>
-          Availability of a particular method can depend on PayFast and on your bank, card issuer or wallet provider.
+          You then complete payment on Safepay&apos;s secure checkout page. If you leave without paying, you can return to
+          the payment or cancel it; a cancelled or expired checkout releases the reserved items and leaves your cart
+          unchanged.
         </p>
       </>
     ),
   },
   {
-    id: "payment-processing",
-    title: "Payment Processing",
+    id: "payment-methods",
+    title: "Payment Methods",
     body: (
       <p>
-        Nexora intends to use PayFast as its payment gateway for supported online transactions. When PayFast is active,
-        payment details are entered through PayFast&apos;s payment flow. Nexora does not store complete card details.
+        Nexora&apos;s checkout is set up for card payments through Safepay. Whether a particular card can be used depends
+        on Safepay and on your card issuer.
+      </p>
+    ),
+  },
+  {
+    id: "payment-confirmation",
+    title: "Payment Confirmation",
+    body: (
+      <>
+        <p>
+          An order is created and treated as paid only after Nexora has confirmed the payment directly with Safepay.
+          Returning to Nexora from the payment page, or reaching a success page, is not on its own treated as proof of
+          payment.
+        </p>
+        <ul>
+          <li>
+            <strong>Processing</strong> — while a payment is being confirmed, the payment page shows that it&apos;s being
+            verified. Please don&apos;t pay again while this is in progress.
+          </li>
+          <li>
+            <strong>Paid</strong> — once confirmed, your order appears in your <Link href="/orders">order history</Link>{" "}
+            with its payment shown as Paid.
+          </li>
+          <li>
+            <strong>Under review</strong> — occasionally a payment response needs a manual check. The order or payment is
+            then shown as under review, and we&apos;ll follow up with you.
+          </li>
+        </ul>
+        <p>
+          Each checkout can result in at most one order. Repeated payment notifications, or returning to Nexora from the
+          payment page more than once, won&apos;t create a duplicate order. If you believe you were charged more than once,
+          contact us with your order ID.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: "failed-and-cancelled-payments",
+    title: "Failed, Declined & Cancelled Payments",
+    body: (
+      <p>
+        If a payment is declined or cancelled, or the reservation ends without a confirmed payment, no order is created
+        and the checkout is not treated as paid. Card payments may need authorization from your card issuer — for example, a
+        one-time code — and a payment isn&apos;t complete until that authorization succeeds. You can try again while your
+        items are still reserved, or check out again later.
       </p>
     ),
   },
@@ -114,31 +123,11 @@ const SECTIONS: LegalSection[] = [
     title: "Payment Security",
     body: (
       <p>
-        PayFast operates as the payment processor and maintains its own payment-security standards for the transactions
-        it handles. Nexora protects the order and account information it holds as described in our{" "}
-        <Link href="/privacy">Privacy Policy</Link>. As with any online service, no payment system can be guaranteed to
-        be completely secure.
-      </p>
-    ),
-  },
-  {
-    id: "payment-authorization",
-    title: "Payment Authorization",
-    body: (
-      <p>
-        Card and other digital payments may require authorization or verification by your issuing bank, wallet provider
-        or payment service — for example, a one-time code. If authorization is declined or not completed, the payment is
-        not complete and the order is not considered paid.
-      </p>
-    ),
-  },
-  {
-    id: "order-confirmation",
-    title: "Order Confirmation",
-    body: (
-      <p>
-        After you place an order it appears immediately in your <Link href="/orders">order history</Link> with its items,
-        shipping address and status. Nexora doesn&apos;t currently send order confirmation emails.
+        Card details are entered on Safepay&apos;s checkout page, not on Nexora, and Nexora never receives or stores your
+        full card number. To help you recognize a payment, Nexora may record limited details such as the card brand and
+        last four digits. How we handle the order and account information we hold is described in our{" "}
+        <Link href="/privacy">Privacy Policy</Link>. As with any online service, no payment system can be guaranteed to be
+        completely secure.
       </p>
     ),
   },
@@ -147,20 +136,41 @@ const SECTIONS: LegalSection[] = [
     title: "Billing Information",
     body: (
       <p>
-        Nexora doesn&apos;t currently collect separate billing details at checkout. When online payment is enabled, any
-        billing information required for a payment will be requested as part of the PayFast payment flow.
+        Nexora doesn&apos;t collect separate billing details at checkout. Any information needed to process a card payment
+        is requested by Safepay on its checkout page.
       </p>
     ),
   },
   {
-    id: "refunds-and-returns",
-    title: "Refunds & Returns",
+    id: "order-confirmation",
+    title: "Order Confirmation",
     body: (
       <p>
-        Refunds are handled under our <Link href="/returns">Return &amp; Refund Policy</Link>. Nexora doesn&apos;t
-        perform automatic refunds, and because online payment isn&apos;t active yet, there are currently no online
-        payments to refund.
+        After your payment is confirmed, your order appears in your <Link href="/orders">order history</Link> with its
+        items, shipping address, order status and payment status. Nexora doesn&apos;t currently send order confirmation
+        emails.
       </p>
+    ),
+  },
+  {
+    id: "refunds",
+    title: "Refunds",
+    body: (
+      <>
+        <p>
+          Refunds are issued by Nexora through Safepay to the original payment. A refund can be for the full amount paid or
+          for part of it, and the total refunded can never exceed the amount paid. Each refund is subject to validation by
+          Nexora and Safepay, so a refund request isn&apos;t guaranteed to succeed, and some refunds may need review before
+          they&apos;re completed.
+        </p>
+        <p>
+          Your order shows a refund only once it has been confirmed — as <strong>Partially refunded</strong> or{" "}
+          <strong>Refunded</strong>, with the amount refunded. A refund concerns the payment only: it doesn&apos;t by
+          itself cancel, return or change the fulfillment of an order. Likewise, cancelling a paid order doesn&apos;t
+          automatically issue a refund; any refund is handled separately. How returns are handled is explained in our{" "}
+          <Link href="/returns">Return &amp; Refund Policy</Link>.
+        </p>
+      </>
     ),
   },
   {
@@ -168,8 +178,8 @@ const SECTIONS: LegalSection[] = [
     title: "Changes to This Policy",
     body: (
       <p>
-        We&apos;ll update this policy — and its &ldquo;Last updated&rdquo; date — when online payment is enabled or when
-        accepted payment methods change.
+        We&apos;ll update this policy — and its &ldquo;Last updated&rdquo; date — when the payment setup changes, for
+        example when payments move out of test mode or accepted payment methods change.
       </p>
     ),
   },
@@ -178,8 +188,8 @@ const SECTIONS: LegalSection[] = [
     title: "Contact",
     body: (
       <p>
-        For questions about pricing or payments, email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or visit
-        our <Link href="/contact">Contact</Link> page.
+        For questions about pricing, payments or refunds, email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or
+        visit our <Link href="/contact">Contact</Link> page. Including your order ID helps us find your payment quickly.
       </p>
     ),
   },
@@ -190,7 +200,7 @@ export default function PaymentPolicyPage() {
     <LegalPage
       eyebrow="Policies"
       title="Payment Policy"
-      intro="Clear information about pricing, checkout and payments at Nexora — including our selected payment provider and what is active in checkout today."
+      intro="How pricing, checkout, payment confirmation and refunds work at Nexora — with payments processed through Safepay."
       updated={POLICIES_UPDATED}
       sections={SECTIONS}
     />

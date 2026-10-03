@@ -14,7 +14,7 @@ import {
 
 export const metadata: Metadata = {
   title: "Contact Nexora",
-  description: "Contact Nexora Commerce about products, orders, your account or our policies.",
+  description: "Contact Nexora Commerce about products, orders, payments, your account or our policies.",
 };
 
 const CARDS = [
@@ -49,6 +49,7 @@ const QUICK_LINKS = [
   { href: "/orders", label: "Your orders and their status" },
   { href: "/shipping", label: "Shipping Policy" },
   { href: "/returns", label: "Return & Refund Policy" },
+  { href: "/payment-policy", label: "Payment Policy" },
 ] as const;
 
 export default function ContactPage() {
@@ -57,7 +58,7 @@ export default function ContactPage() {
       <InfoHero
         eyebrow="Support"
         title="Contact Us"
-        intro="Have a question about a product, your account, an order, or using Nexora? We're here to help you find the information you need."
+        intro="Have a question about a product, your account, an order or payment, or using Nexora? We're here to help you find the information you need."
       />
 
       <section aria-labelledby="contact-details" className="flex flex-col gap-5">

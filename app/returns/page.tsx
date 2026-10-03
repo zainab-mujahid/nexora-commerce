@@ -9,19 +9,20 @@ export const metadata: Metadata = {
   description: "How returns, refunds, cancellations and damaged or incorrect items are handled at Nexora Commerce.",
 };
 
-// Nexora has no online returns workflow, return labels or refund automation,
-// and checkout doesn't currently take payment — so every return and refund
-// question is routed to support, and no window, label or timeline is
-// promised.
+// Nexora has no online returns workflow or return labels, so returns are
+// routed to support. Payment refunds are a separate, merchant-issued step
+// through Safepay (full or partial, validated by Nexora and Safepay) — no
+// return window, refund timeline or automatic refund/restock is promised.
 const SECTIONS: LegalSection[] = [
   {
     id: "overview",
     title: "Overview",
     body: (
       <p>
-        We want you to be happy with what you order from Nexora. Returns and refunds are handled by our support team
-        case by case — there isn&apos;t an online returns form or automated refund process in the store. This policy
-        explains how to reach us and what to expect.
+        We want you to be happy with what you order from Nexora. Returns are handled by our support team case by case —
+        there isn&apos;t an online returns form in the store. A return and a refund are separate steps: agreeing a
+        return doesn&apos;t by itself issue a refund, and a refund is a decision about your payment. This policy explains
+        how to reach us and what to expect.
       </p>
     ),
   },
@@ -89,13 +90,20 @@ const SECTIONS: LegalSection[] = [
     id: "refunds",
     title: "Refunds",
     body: (
-      <p>
-        Online payment isn&apos;t currently active in Nexora checkout, so orders placed in the store aren&apos;t charged
-        online and there&apos;s nothing to refund automatically. When online payment through our selected provider,
-        PayFast, becomes available, refunds for eligible returns will be reviewed by our support team — Nexora
-        doesn&apos;t perform automatic refunds. For refund questions, contact us. See our{" "}
-        <Link href="/payment-policy">Payment Policy</Link> for more information.
-      </p>
+      <>
+        <p>
+          Refunds aren&apos;t automatic. Where a refund is appropriate — for example, after an agreed return or for a
+          damaged or incorrect item — our team issues it through our payment provider, Safepay, to the original payment.
+          A refund may be for the full amount paid or for part of it, and it&apos;s subject to validation by Nexora and
+          Safepay, so we can&apos;t guarantee the outcome of every request.
+        </p>
+        <p>
+          Once a refund is confirmed, your order shows its payment as <strong>Partially refunded</strong> or{" "}
+          <strong>Refunded</strong>, with the amount refunded. When the funds reach your account depends on Safepay and
+          your card issuer. See our <Link href="/payment-policy">Payment Policy</Link> for more about payments and
+          refunds.
+        </p>
+      </>
     ),
   },
   {
@@ -103,10 +111,12 @@ const SECTIONS: LegalSection[] = [
     title: "Order Cancellations",
     body: (
       <p>
-        Orders can&apos;t be cancelled from your account. The store can cancel an order while it&apos;s still Pending or
-        Processing — contact us as soon as possible if you&apos;d like to cancel. Once an order has shipped it can no
-        longer be cancelled. A cancelled order shows the status <strong>Cancelled</strong> in your{" "}
-        <Link href="/orders">order history</Link>.
+        Before you pay, you can cancel a checkout yourself from its payment page — no order is created and your cart
+        stays as it was. Once an order has been placed it can&apos;t be cancelled from your account, but the store can
+        cancel it while it&apos;s still Pending or Processing — contact us as soon as possible if you&apos;d like to
+        cancel. Once an order has shipped it can no longer be cancelled. A cancelled order shows the status{" "}
+        <strong>Cancelled</strong> in your <Link href="/orders">order history</Link>. Cancelling a paid order doesn&apos;t
+        automatically refund it; any refund is handled separately, as described above.
       </p>
     ),
   },

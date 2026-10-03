@@ -19,9 +19,11 @@ const SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          When you place an order, Nexora checks that each product is still available in the quantity you selected and
-          records the order with the products, prices and shipping address shown at checkout. Your order then appears in
-          your <Link href="/orders">order history</Link> with the status <strong>Pending</strong>.
+          When you check out, Nexora checks that each product is still available in the quantity you selected and
+          reserves it while you pay. Once your payment is confirmed, the order is recorded with the products, prices and
+          shipping address shown at checkout, and appears in your <Link href="/orders">order history</Link> with the
+          status <strong>Pending</strong>. See our <Link href="/payment-policy">Payment Policy</Link> for how payment
+          confirmation works.
         </p>
         <p>Orders are processed after they are placed and are subject to product availability.</p>
       </>
