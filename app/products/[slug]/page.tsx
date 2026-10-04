@@ -57,12 +57,13 @@ export default async function ProductPage({
         </nav>
       </Reveal>
 
-      {/* Imagery and product information share the row evenly; the gallery
-          is capped so the main image stays a balanced size (about 32rem on
-          desktop, 28rem centred on small screens) instead of dominating. */}
-      <div className="mt-6 grid gap-8 md:grid-cols-2 md:gap-10 lg:gap-14">
+      {/* Imagery and product information share the row evenly (28rem
+          centred gallery on small screens). From lg, where the gallery adds
+          its vertical thumbnail rail, its column is slightly wider (6:5) so
+          the rail doesn't come out of the main image's width. */}
+      <div className="mt-6 grid gap-8 md:grid-cols-2 md:gap-10 lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] lg:gap-14">
         <Reveal trigger="mount" rise={0} scale={0.985} className="md:sticky md:top-24 md:self-start">
-          <ProductImageGallery images={product.images} alt={product.name} className="mx-auto w-full max-w-md md:mx-0 md:max-w-lg" />
+          <ProductImageGallery images={product.images} alt={product.name} className="mx-auto w-full max-w-md md:mx-0 md:max-w-lg lg:max-w-none" />
         </Reveal>
 
         <Stagger trigger="mount" delay={0.08} className="flex flex-col gap-6">

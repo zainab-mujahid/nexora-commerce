@@ -29,6 +29,10 @@
   --surface: #ffffff;
   /* Quiet fills: hover rows, table headers, skeletons, image placeholders. */
   --fill: #f4f5f7;
+  /* Product media backdrop (cards, gallery, thumbnails): a soft neutral
+     off-white shown wherever an image does not fill its frame. Theme-owned,
+     never stored per product. */
+  --media: #f3f4f6;
   /* Secondary text (descriptions, metadata) and tertiary text (hints). */
   --muted: #5a6170;
   --subtle: #666d7a;
@@ -64,6 +68,7 @@
   --foreground: #e6e8ec;
   --surface: #181c23;
   --fill: #1f242d;
+  --media: #20252d;
   --muted: #a1a8b3;
   --subtle: #8a919d;
   --border: #272c35;
@@ -98,6 +103,7 @@
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
   --color-fill: var(--fill);
+  --color-media: var(--media);
   --color-muted: var(--muted);
   --color-subtle: var(--subtle);
   --color-border: var(--border);

@@ -29,7 +29,7 @@ export function ProductImageFrame({
   const showPlaceholder = image === null || failed;
 
   return (
-    <div className={`relative overflow-hidden bg-fill ${className}`}>
+    <div className={`relative overflow-hidden bg-media ${className}`}>
       {showPlaceholder && (
         <svg
           aria-hidden="true"
