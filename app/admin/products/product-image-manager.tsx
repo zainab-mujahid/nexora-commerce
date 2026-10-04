@@ -85,12 +85,10 @@ export function ProductImageManager({
 
   return (
     <div className="card flex flex-col gap-5 p-5 sm:p-6">
-      {!storage.reachable && (
-        <p role="alert" className="rounded-md border border-warning/40 bg-fill/40 px-3 py-2 text-xs leading-relaxed">
-          Image storage isn&apos;t reachable from this server{storage.problem ? ` (${storage.problem})` : ""}. Stored images
-          can&apos;t be shown, uploaded or deleted until the S3 bucket and AWS credentials are fixed.
-        </p>
-      )}
+      {/* No banner for !storage.reachable: that flag comes from a bucket-level
+          HeadBucket probe, which needs s3:ListBucket. The app's object-scoped
+          IAM access makes it 403 while uploads, display and deletes all work,
+          so it was a false alarm. Real failures still surface per operation. */}
       {storage.reachable && missingCount > 0 && (
         <p role="status" className="rounded-md border border-warning/40 bg-fill/40 px-3 py-2 text-xs leading-relaxed">
           {missingCount === 1 ? "1 image file is" : `${missingCount} image files are`} missing from storage. Customers see a
