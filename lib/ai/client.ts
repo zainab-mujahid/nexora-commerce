@@ -2,7 +2,7 @@ import "server-only";
 
 import { FinishReason, GoogleGenAI, type Schema, type ThinkingLevel } from "@google/genai";
 
-import { GEMINI_API_KEY } from "./env";
+import { getGeminiApiKey } from "./env";
 import { AiInvalidResponseError } from "./errors";
 import { logAiEvent, type AiOperation } from "./log";
 import { withAiRetry } from "./retry";
@@ -13,7 +13,18 @@ import { withAiRetry } from "./retry";
 // That's what implementation-plan.txt Step 21's "provider portability" note
 // means in practice: swapping embedding providers/models later only touches
 // this file, not its callers.
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+let ai: GoogleGenAI | undefined;
+
+function getAiClient(): GoogleGenAI {
+  if (!ai) {
+    ai = new GoogleGenAI({
+      apiKey: getGeminiApiKey(),
+    });
+  }
+
+  return ai;
+}
 
 // Selected in Step 21, smoke-tested in Step 22 Phase 1A: gemini-embedding-2
 // at 1536 output dimensions. A stored products.embedding is only ever
@@ -32,6 +43,7 @@ export const EMBEDDING_DIMENSIONS = 1536;
 // Callers that must never fail outright (product create/edit) are
 // responsible for catching this themselves — see
 // lib/ai/product-embeddings.ts's ensureProductEmbeddingCurrent().
+//
 // `operation` (Step 22 Phase 8F): a small, server-controlled label
 // identifying which caller this embedding call is for, used only for
 // structured observability (see lib/ai/log.ts). Required so nothing here
@@ -65,6 +77,7 @@ export async function generateEmbedding(
   // reaches the post-call checks keeps the default. Logged only on the
   // error path below — the success log is untouched.
   let failureStage: "provider_request" | "invalid_shape" | "invalid_values" = "provider_request";
+
   try {
     // Step 22 Phase 8B: retry wraps ONLY this raw provider round-trip, never
     // the shape/finite-number checks below — those are our own validation,
@@ -73,7 +86,7 @@ export async function generateEmbedding(
     const response = await withAiRetry(
       () => {
         options.onProviderRequest?.();
-        return ai.models.embedContent({
+        return getAiClient().models.embedContent({
           model: EMBEDDING_MODEL,
           contents: text,
           config: options.signal
@@ -107,6 +120,7 @@ export async function generateEmbedding(
       outcome: "success",
       durationMs: Math.round(performance.now() - start),
     });
+
     return values;
   } catch (err) {
     // Step 22 Phase 8G: failureStage added to the existing error event —
@@ -118,6 +132,7 @@ export async function generateEmbedding(
       durationMs: Math.round(performance.now() - start),
       failureStage,
     });
+
     throw err;
   }
 }
@@ -185,6 +200,7 @@ export async function generateStructuredJson(params: {
   // only on the error path, success log unchanged.
   let failureStage: "provider_request" | "truncated" | "empty_response" | "malformed_json" =
     "provider_request";
+
   try {
     // Step 22 Phase 8B: retry wraps ONLY this raw provider round-trip. The
     // empty-response and malformed-JSON checks below run strictly after a
@@ -194,7 +210,7 @@ export async function generateStructuredJson(params: {
     // failure this project's retry policy explicitly excludes.
     const response = await withAiRetry(
       () =>
-        ai.models.generateContent({
+        getAiClient().models.generateContent({
           model: GENERATION_MODEL,
           contents: params.contents,
           config: {
@@ -221,12 +237,14 @@ export async function generateStructuredJson(params: {
     }
 
     const text = response.text;
+
     if (!text) {
       failureStage = "empty_response";
       throw new Error("Gemini returned an empty structured response.");
     }
 
     let parsed: unknown;
+
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -241,6 +259,7 @@ export async function generateStructuredJson(params: {
       outcome: "success",
       durationMs: Math.round(performance.now() - start),
     });
+
     return parsed;
   } catch (err) {
     // Step 22 Phase 8G: failureStage added to the existing error event —
@@ -252,6 +271,7 @@ export async function generateStructuredJson(params: {
       durationMs: Math.round(performance.now() - start),
       failureStage,
     });
+
     throw err;
   }
 }
@@ -287,10 +307,11 @@ export async function generateStructuredJsonStream(params: {
   const start = performance.now();
   let failureStage: "provider_request" | "truncated" | "empty_response" | "malformed_json" =
     "provider_request";
+
   try {
     const { stream, first } = await withAiRetry(
       async () => {
-        const stream = await ai.models.generateContentStream({
+        const stream = await getAiClient().models.generateContentStream({
           model: GENERATION_MODEL,
           contents: params.contents,
           config: {
@@ -302,6 +323,7 @@ export async function generateStructuredJsonStream(params: {
             ...(params.signal && { abortSignal: params.signal }),
           },
         });
+
         return { stream, first: await stream.next() };
       },
       { operation: params.operation },
@@ -309,9 +331,11 @@ export async function generateStructuredJsonStream(params: {
 
     let text = "";
     let finishReason: FinishReason | undefined;
+
     for (let chunk = first; !chunk.done; chunk = await stream.next()) {
       finishReason = chunk.value.candidates?.[0]?.finishReason ?? finishReason;
       const chunkText = chunk.value.text;
+
       if (chunkText) {
         text += chunkText;
         params.onTextChunk(chunkText);
@@ -330,6 +354,7 @@ export async function generateStructuredJsonStream(params: {
     }
 
     let parsed: unknown;
+
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -342,6 +367,7 @@ export async function generateStructuredJsonStream(params: {
       outcome: "success",
       durationMs: Math.round(performance.now() - start),
     });
+
     return parsed;
   } catch (err) {
     logAiEvent("error", "ai_provider_call", {
@@ -350,6 +376,7 @@ export async function generateStructuredJsonStream(params: {
       durationMs: Math.round(performance.now() - start),
       failureStage,
     });
+
     throw err;
   }
 }
