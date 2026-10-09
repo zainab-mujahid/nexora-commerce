@@ -2,6 +2,7 @@
 
 import { AnimatePresence, m } from "motion/react";
 import { useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
+import { v4 as uuidv4 } from "uuid";
 
 import {
   askShoppingAssistant,
@@ -205,11 +206,11 @@ export function AiShoppingAssistant({
     if (text.length === 0 || isPending) return;
 
     setInputValue("");
-    setTranscript((prev) => [...prev, { role: "user", id: crypto.randomUUID(), text }]);
+    setTranscript((prev) => [...prev, { role: "user", id: uuidv4(), text }]);
     setStreamingText("");
     stickToBottomRef.current = true;
 
-    const turnId = crypto.randomUUID();
+    const turnId = uuidv4();
     activeTurnRef.current = turnId;
 
     // The whole turn, stream included, runs inside this transition, so
@@ -266,7 +267,7 @@ export function AiShoppingAssistant({
         setShoppingContext(result.context);
       }
 
-      setTranscript((prev) => [...prev, toAssistantMessage(crypto.randomUUID(), result)]);
+      setTranscript((prev) => [...prev, toAssistantMessage(uuidv4(), result)]);
     });
   }
 

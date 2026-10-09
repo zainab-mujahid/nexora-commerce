@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ChangeEvent } from "react";
+import { v4 as uuidv4 } from "uuid";
 
 import { PRODUCT_IMAGE_MAX_PER_PRODUCT } from "@/lib/admin/schemas";
 
@@ -52,7 +53,7 @@ export function NewProductImages({
         onError(`A product can have at most ${PRODUCT_IMAGE_MAX_PER_PRODUCT} images.`);
         break;
       }
-      accepted.push({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) });
+      accepted.push({ id: uuidv4(), file, previewUrl: URL.createObjectURL(file) });
     }
     if (accepted.length === 0) return;
     const next = [...images, ...accepted];
