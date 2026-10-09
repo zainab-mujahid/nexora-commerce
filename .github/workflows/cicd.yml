@@ -1,0 +1,65 @@
+name: Nexora CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint
+
+      - name: Generate Image Tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+          --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ vars.NEXT_PUBLIC_SUPABASE_URL }}" \
+          --build-arg NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="${{ vars.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}" \
+          --build-arg AWS_S3_BUCKET_NAME="${{ vars.AWS_S3_BUCKET_NAME }}" \
+          --build-arg AWS_REGION="${{ vars.AWS_REGION }}" \
+          --build-arg S3_PUBLIC_BASE_URL="${{ vars.S3_PUBLIC_BASE_URL }}" \
+          -t "nexora:$IMAGE_TAG" .
+
+      - name: Verify Docker Image
+        run: docker image inspect "nexora:$IMAGE_TAG"
+
+      - name: Save Docker Image
+        run: docker save -o "nexora-$IMAGE_TAG.tar" "nexora:$IMAGE_TAG"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/ec2-key
+          chmod 600 ~/.ssh/ec2-key
+
+      - name: Add EC2 IP To known_hosts
+        run: ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy Docker Image To EC2
+        run: |
+          scp -i ~/.ssh/ec2-key "nexora-$IMAGE_TAG.tar" \
+          "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/nexora/"
+
+      - name: Deploy On EC2
+        run: |
+          ssh -i ~/.ssh/ec2-key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+          "docker load -i /home/${{ secrets.EC2_USER }}/nexora/nexora-$IMAGE_TAG.tar \
+          && /home/${{ secrets.EC2_USER }}/nexora/deploy.sh $IMAGE_TAG \
+          && rm -f /home/${{ secrets.EC2_USER }}/nexora/nexora-$IMAGE_TAG.tar" 
