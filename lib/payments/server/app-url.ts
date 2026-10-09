@@ -16,7 +16,15 @@ export function getAppBaseUrl(): string {
     throw new PaymentError("configuration", { dbCode: "APP_BASE_URL_INVALID" });
   }
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (!(url.protocol === "https:" || (local && url.protocol === "http:")) || url.pathname !== "/" || url.search || url.hash) {
+  // Temporary, opt-in: plain HTTP on a bare IPv4 host (an EC2 public IP
+  // without TLS), for Safepay SANDBOX testing only. Off unless explicitly
+  // enabled; never applies to any other provider or environment.
+  const sandboxHttpIp =
+    process.env.APP_BASE_URL_ALLOW_HTTP === "true" &&
+    process.env.PAYMENT_PROVIDER === "safepay" &&
+    process.env.SAFEPAY_ENVIRONMENT === "sandbox" &&
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname);
+  if (!(url.protocol === "https:" || ((local || sandboxHttpIp) && url.protocol === "http:")) || url.pathname !== "/" || url.search || url.hash) {
     throw new PaymentError("configuration", { dbCode: "APP_BASE_URL_INVALID" });
   }
   return url.origin;
