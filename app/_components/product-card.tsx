@@ -14,7 +14,7 @@ export function ProductCard({ product }: { product: ProductListItem }) {
   return (
     <Link
       href={`/products/${product.slug}`}
-      className="group flex h-full flex-col gap-3.5 rounded-lg focus-visible:outline-offset-4"
+      className="product-card group flex h-full flex-col gap-3.5 rounded-lg focus-visible:outline-offset-4"
     >
       <ProductImageFrame
         image={pickDisplayImage(product.images)}

@@ -40,7 +40,7 @@ export default async function ProductPage({
     : null;
 
   return (
-    <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-12">
+    <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
       <Reveal trigger="mount" rise={6}>
         <nav aria-label="Breadcrumb" className="flex flex-wrap items-center text-sm text-muted">
           <Link href="/products" className="nav-link">
@@ -57,24 +57,25 @@ export default async function ProductPage({
         </nav>
       </Reveal>
 
-      {/* Imagery and product information share the row evenly (28rem
+      {/* Imagery and product information share the row evenly (24rem
           centred gallery on small screens). From lg, where the gallery adds
-          its vertical thumbnail rail, its column is slightly wider (6:5) so
-          the rail doesn't come out of the main image's width. */}
-      <div className="mt-6 grid gap-8 md:grid-cols-2 md:gap-10 lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] lg:gap-14">
+          its vertical thumbnail rail, its column is a fixed 29.5rem (rail
+          included) so the main image stays medium-sized and fits a desktop
+          viewport; the information column takes the rest. */}
+      <div className="mt-4 grid gap-6 sm:mt-5 md:grid-cols-2 md:gap-10 lg:grid-cols-[minmax(0,29.5rem)_minmax(0,1fr)] lg:gap-14">
         <Reveal trigger="mount" rise={0} scale={0.985} className="md:sticky md:top-24 md:self-start">
-          <ProductImageGallery images={product.images} alt={product.name} className="mx-auto w-full max-w-md md:mx-0 md:max-w-lg lg:max-w-none" />
+          <ProductImageGallery images={product.images} alt={product.name} className="mx-auto w-full max-w-sm md:mx-0 lg:max-w-none" />
         </Reveal>
 
-        <Stagger trigger="mount" delay={0.08} className="flex flex-col gap-6">
-          <StaggerItem className="flex flex-col gap-4">
+        <Stagger trigger="mount" delay={0.08} className="flex flex-col gap-5">
+          <StaggerItem className="flex flex-col gap-3">
             {product.category && <span className="eyebrow">{product.category.name}</span>}
-            <h1 className="display-title text-3xl sm:text-[2.75rem]">
+            <h1 className="display-title text-[1.375rem] leading-snug break-words sm:text-2xl lg:text-[1.75rem] lg:leading-tight">
               {product.name}
             </h1>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span className="text-3xl font-semibold tracking-tight tabular-nums">
+              <span className="text-xl font-semibold tracking-tight tabular-nums sm:text-[1.375rem]">
                 {formatPrice(product.price)}
               </span>
               <StockBadge stock={product.stock} />
@@ -82,7 +83,7 @@ export default async function ProductPage({
           </StaggerItem>
 
           {product.description && (
-            <StaggerItem as="p" className="border-t border-border pt-6 text-base leading-relaxed text-muted text-pretty">
+            <StaggerItem as="p" className="border-t border-border pt-5 text-base leading-relaxed text-muted text-pretty">
               {product.description}
             </StaggerItem>
           )}

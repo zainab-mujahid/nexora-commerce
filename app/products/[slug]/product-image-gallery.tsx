@@ -37,11 +37,11 @@ export function ProductImageGallery({
   const frame = "aspect-[4/5] w-full rounded-2xl ring-1 ring-inset ring-border";
   // Without a rail (one image, or none) the frame would take the whole
   // wider lg column; cap it at about the size it has beside the rail.
-  const soloCap = "lg:max-w-[30rem]";
+  const soloCap = "lg:max-w-[24rem]";
 
   if (images.length === 0 || !initial) {
     return (
-      <div className={className}>
+      <div className={`product-media ${className}`}>
         <ProductImageFrame image={null} alt={alt} className={`${frame} ${soloCap}`} />
       </div>
     );
@@ -52,7 +52,7 @@ export function ProductImageGallery({
 
   return (
     <div
-      className={`flex flex-col gap-3 ${
+      className={`product-media flex flex-col gap-3 ${
         hasThumbnails ? "lg:grid lg:grid-cols-[4.5rem_minmax(0,1fr)] lg:gap-4" : ""
       } ${className}`}
     >

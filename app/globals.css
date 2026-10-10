@@ -53,6 +53,18 @@
   /* Hover/raised surfaces: a soft, wide shadow rather than a heavy one. */
   --shadow-raised: 0 10px 28px -12px rgb(16 24 40 / 0.2), 0 2px 6px -2px rgb(16 24 40 / 0.06);
   --shadow-float: 0 12px 32px -8px rgb(16 24 40 / 0.18), 0 2px 6px rgb(16 24 40 / 0.06);
+  /* Storefront product card tile (.product-card): none in light — the card
+     keeps its open, frameless look and the page's own tokens. */
+  --card-tile: transparent;
+  --card-tile-pad: 0px;
+  --card-foreground: var(--foreground);
+  --card-muted: var(--muted);
+  --card-subtle: var(--subtle);
+  --card-border: var(--border);
+  --card-media: var(--media);
+  --card-success: var(--success);
+  --card-warning: var(--warning);
+  --card-danger: var(--danger);
   color-scheme: light;
 }
 
@@ -83,6 +95,21 @@
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
   --shadow-raised: 0 14px 32px -12px rgb(0 0 0 / 0.7), 0 2px 6px -2px rgb(0 0 0 / 0.4);
   --shadow-float: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
+  /* Product card tile: a muted mid-tone warm taupe that sits softly on the
+     blue-gray page and echoes the champagne accent without turning cream.
+     Content on it uses dark ink and deepened status colors (all >= 4.5:1 on
+     the tile and on its lighter image backdrop). --card-media is also the
+     product detail gallery's backdrop (.product-media). */
+  --card-tile: #a59d91;
+  --card-tile-pad: 0.625rem;
+  --card-foreground: #15171b;
+  --card-muted: #2f333a;
+  --card-subtle: #2f333a;
+  --card-border: #8a8276;
+  --card-media: #b4ada2;
+  --card-success: #0f3d22;
+  --card-warning: #5a210d;
+  --card-danger: #631212;
   color-scheme: dark;
 }
 
@@ -475,6 +502,29 @@
   }
 
   /* ---- Storefront product card ---- */
+  /* The card's tile and the tokens its content reads, from the --card-*
+     set of whichever theme applies here (so it also follows .theme-inverse
+     subtrees). --ring is left alone: the focus outline is drawn outside the
+     tile, on the page. */
+  .product-card {
+    --foreground: var(--card-foreground);
+    --muted: var(--card-muted);
+    --subtle: var(--card-subtle);
+    --border: var(--card-border);
+    --media: var(--card-media);
+    --success: var(--card-success);
+    --warning: var(--card-warning);
+    --danger: var(--card-danger);
+    color: var(--foreground);
+    background: var(--card-tile);
+    padding: var(--card-tile-pad);
+  }
+  /* Product detail gallery: the same image backdrop as the cards. */
+  .product-media {
+    --media: var(--card-media);
+    --border: var(--card-border);
+    --subtle: var(--card-subtle);
+  }
   /* Lift + deeper shadow on the image frame while the card is hovered. */
   .product-card-media {
     transition:
