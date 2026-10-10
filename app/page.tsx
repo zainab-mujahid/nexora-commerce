@@ -90,7 +90,7 @@ export default async function Home() {
               {/* xl: one line at 42px (~506px wide) ends clear of the floating gift
                   box in the artwork; narrower widths wrap. */}
               <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl xl:text-[2.625rem] xl:leading-none">
-                Shop smarter, live better with Nexora.
+                Shop smarter, with Nexora.
               </h1>
               <HeroTypewriter className="text-2xl font-semibold tracking-tight text-foreground/75 sm:text-3xl" />
             </StaggerItem>
